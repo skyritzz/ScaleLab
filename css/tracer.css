@@ -21,17 +21,26 @@
 .pipeline-flow {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-x: auto;
-  padding: 1.75rem 1.25rem;
+  -webkit-overflow-scrolling: touch;
+  padding: 1.5rem 1rem;
   gap: 0;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
   position: relative;
   width: 100%;
+  max-width: 100%;
   margin: 0 auto;
+  box-sizing: border-box;
 }
 .pipeline-flow::-webkit-scrollbar { display: none; }
+@media (min-width: 900px) {
+  .pipeline-flow {
+    justify-content: center;
+    padding: 1.75rem 1.25rem;
+  }
+}
 
 /* =====================================================
    HOP NODE
@@ -543,11 +552,31 @@
   }
 }
 
+@media (max-width: 540px) {
+  .insp-header {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+  }
+  .insp-code-block pre {
+    font-size: 0.72rem;
+    padding: 0.65rem;
+  }
+  .pipeline-hop .hop-inner {
+    min-width: 90px;
+    padding: 0.75rem 0.6rem;
+  }
+}
+
 /* =====================================================
    DATABASE TABLE
    ===================================================== */
 .db-table-wrapper {
-  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: inherit;
 }
 
 .db-table-header {

@@ -904,15 +904,37 @@
 @media (max-width: 980px) {
   .chaos-2col-layout {
     grid-template-columns: 1fr;
+    gap: 1.25rem;
   }
   .chaos-impact-panel {
     position: static;
+  }
+  .challenge-play-split {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
   }
 }
 
 @media (max-width: 640px) {
   .category-card-grid {
     grid-template-columns: 1fr;
+  }
+  .chaos-category-section {
+    margin-bottom: 1.25rem;
+  }
+  .chaos-command-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .btn-sre-action {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .challenge-step-box {
+    padding: 0.85rem 1rem;
   }
 }
 

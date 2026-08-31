@@ -1733,39 +1733,76 @@ html[data-theme="light"] .url-input-wrap {
 }
 
 /* =====================================================
-   RESPONSIVE
+   RESPONSIVE (MOBILE & TABLET ADAPTATION)
    ===================================================== */
-@media (max-width: 960px) {
+@media (max-width: 1024px) {
+  .site-header {
+    padding: 0 1rem;
+  }
+  .main-content {
+    padding: 0 1rem 4rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .site-header {
+    height: auto;
+    padding: 0.6rem 1rem;
+  }
+
+  .header-nav-container {
+    flex-wrap: wrap;
+    gap: 0.65rem;
+  }
+
+  .header-tabs {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    justify-content: flex-start;
+    padding: 4px;
+  }
+  .header-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-tab-btn {
+    flex: 1 0 auto;
+    justify-content: center;
+    padding: 0.45rem 0.75rem;
+    min-height: 38px;
+  }
+
   .trace-inspector-grid {
     flex-direction: column;
   }
 }
 
 @media (max-width: 680px) {
-  .header-inner {
-    flex-wrap: wrap;
-    height: auto;
-    padding: 0.7rem 1rem;
-    gap: 0.6rem;
-  }
-
-  .tab-nav {
-    order: 3;
-    width: 100%;
-    justify-content: center;
+  .hero-section {
+    padding: 2.5rem 0.5rem 1.5rem;
   }
 
   .hero-title {
-    font-size: 2.2rem;
+    font-size: clamp(1.75rem, 6vw, 2.35rem);
+    line-height: 1.15;
+  }
+
+  .hero-subtitle {
+    font-size: 0.92rem;
   }
 
   .shorten-input-row {
     flex-direction: column;
+    gap: 0.6rem;
   }
 
   .btn-shorten {
+    width: 100%;
     justify-content: center;
-    min-height: 48px;
+    min-height: 46px;
   }
 
   .options-grid {
@@ -1776,10 +1813,50 @@ html[data-theme="light"] .url-input-wrap {
     grid-template-columns: 1fr;
   }
 
+  .sample-urls-wrap {
+    flex-wrap: wrap;
+  }
+
+  .sample-url-chip {
+    padding: 0.35rem 0.65rem;
+    font-size: 0.72rem;
+  }
+
+  .modal-box {
+    width: 94vw;
+    max-height: 88vh;
+    margin: 1rem;
+  }
+
+  .modal-body {
+    max-height: calc(88vh - 120px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 1rem;
+  }
+
   .toast-container {
     bottom: 1rem;
-    right: 1rem;
-    left: 1rem;
+    right: 0.75rem;
+    left: 0.75rem;
     width: auto;
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-title {
+    display: none;
+  }
+  .brand-slash {
+    display: none;
+  }
+  .telemetry-live-tag {
+    display: none;
+  }
+  .utility-divider {
+    display: none;
+  }
+  .btn-utility span:not(.theme-toggle-icon) {
+    font-size: 0.72rem;
   }
 }
