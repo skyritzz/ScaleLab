@@ -382,9 +382,22 @@ class ApplicationController {
         e.preventDefault();
         const urlInput = document.getElementById('input-long-url');
         const strategySelect = document.getElementById('select-strategy');
-        const longUrl = urlInput.value.trim();
+        let longUrl = urlInput.value.trim();
         const strategy = strategySelect.value;
         if (longUrl) {
+          // Security: Block unsafe protocols (javascript:, data:, vbscript:, etc.)
+          const lowerUrl = longUrl.toLowerCase();
+          if (lowerUrl.startsWith('javascript:') || lowerUrl.startsWith('data:') || lowerUrl.startsWith('vbscript:') || lowerUrl.startsWith('file:')) {
+            alert('Invalid URL scheme. Only HTTP and HTTPS destination URLs are supported.');
+            return;
+          }
+
+          // Auto-prefix if protocol is omitted
+          if (!/^https?:\/\//i.test(longUrl)) {
+            longUrl = 'https://' + longUrl;
+            urlInput.value = longUrl;
+          }
+
           this.tracer.runWriteTrace(longUrl, strategy, this.state.redirectType, this.state);
 
           setTimeout(() => {

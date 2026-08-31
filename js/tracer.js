@@ -470,16 +470,16 @@ export class RequestTracer {
           <div class="insp-icon-box">${this.getHopSvgIcon(hop.id)}</div>
           <div class="insp-meta">
             <div class="insp-name-row">
-              <span class="insp-component-name">${hop.label}</span>
+              <span class="insp-component-name">${this.escapeHtml(hop.label)}</span>
               <span class="insp-node-tag">System Node</span>
             </div>
-            <span class="insp-role-text">${hop.role}</span>
+            <span class="insp-role-text">${this.escapeHtml(hop.role)}</span>
           </div>
         </div>
         <div class="insp-header-right">
           <div class="insp-latency-badge" title="Estimated processing latency">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            <span class="insp-latency-num">${hop.durationMs}</span>
+            <span class="insp-latency-num">${Number(hop.durationMs) || 0}</span>
             <span class="insp-latency-unit">ms</span>
           </div>
         </div>
@@ -491,14 +491,14 @@ export class RequestTracer {
             <svg class="insp-label-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
             <span>What is happening</span>
           </div>
-          <div class="insp-card-text">${hop.whatIsHappening}</div>
+          <div class="insp-card-text">${this.escapeHtml(hop.whatIsHappening)}</div>
         </div>
         <div class="insp-card insp-card-why">
           <div class="insp-card-label">
             <svg class="insp-label-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
             <span>Why it exists</span>
           </div>
-          <div class="insp-card-text">${hop.whyExists}</div>
+          <div class="insp-card-text">${this.escapeHtml(hop.whyExists)}</div>
         </div>
       </div>
 
@@ -574,20 +574,23 @@ export class RequestTracer {
     `;
 
     this.databaseRecords.forEach(rec => {
+      const safeShortCode = this.escapeHtml(rec.shortCode);
+      const safeLongUrl = this.escapeHtml(rec.longUrl);
+      const safeCreatedAt = this.escapeHtml(rec.createdAt);
       html += `
         <tr>
-          <td><span class="db-id">#${rec.id}</span></td>
-          <td><code class="short-code-badge">${rec.shortCode}</code></td>
-          <td class="long-url-cell" title="${rec.longUrl}">${rec.longUrl}</td>
-          <td class="text-muted">${rec.createdAt}</td>
-          <td><span class="access-pill">${rec.accessCount}</span></td>
+          <td><span class="db-id">#${Number(rec.id) || 1}</span></td>
+          <td><code class="short-code-badge">${safeShortCode}</code></td>
+          <td class="long-url-cell" title="${safeLongUrl}">${safeLongUrl}</td>
+          <td class="text-muted">${safeCreatedAt}</td>
+          <td><span class="access-pill">${Number(rec.accessCount) || 0}</span></td>
           <td>
             <span class="cache-status-pill ${rec.inCache ? 'in-cache' : 'not-cached'}">
               ${rec.inCache ? '● In Redis RAM' : '○ DB Only'}
             </span>
           </td>
           <td>
-            <button class="btn-visit-short" data-short-code="${rec.shortCode}">
+            <button class="btn-visit-short" data-short-code="${safeShortCode}">
               Visit (GET)
             </button>
           </td>
