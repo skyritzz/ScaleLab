@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sho.rt: URL Shortener System Design Playground</title>
+  <meta name="description" content="Create real short URLs. Watch requests flow through API, Redis, and Database. Scale to millions. Break things. Fix them.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/tracer.css">
+  <link rel="stylesheet" href="css/metrics.css">
+  <link rel="stylesheet" href="css/challenges.css">
+</head>
+<body>
+
+  <!-- ============================================================
+       GLOBAL HEADER & TOP NAVIGATION (UNIFIED 1-ROW COHESIVE BAR)
+  ============================================================ -->
+  <header class="site-header">
+    <div class="header-nav-container">
+
+      <!-- Left: Brand Anchor -->
+      <div class="brand-group">
+        <div class="brand-icon-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        </div>
+        <div class="brand-text-wrap">
+          <span class="brand-name">sho.rt</span>
+          <span class="brand-slash">/</span>
+          <span class="brand-title">System Simulator</span>
+        </div>
+      </div>
+
+      <!-- Center: Product Navigation Tabs -->
+      <nav class="header-tabs" aria-label="Simulator Modes">
+        <button class="nav-tab-btn active" data-mode="how-it-works" id="tab-how-it-works">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/><path d="m15 15 3 3-3 3"/></svg>
+          <span>How it works</span>
+        </button>
+        <button class="nav-tab-btn" data-mode="scale-simulator" id="tab-scale-simulator">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span>Scale System</span>
+        </button>
+        <button class="nav-tab-btn" data-mode="challenges" id="tab-challenges">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          <span>Challenges</span>
+        </button>
+        <button class="nav-tab-btn" data-mode="chaos-lab" id="tab-chaos-lab">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Chaos Lab</span>
+        </button>
+      </nav>
+
+      <!-- Right: Utilities & Status -->
+      <div class="header-utilities">
+        <div class="telemetry-live-tag" title="Dynamic real-time simulation engine">
+          <span class="telemetry-dot"></span>
+          <span>Live Engine</span>
+        </div>
+
+        <div class="utility-divider"></div>
+
+        <button class="btn-utility btn-theme-toggle" id="btn-theme-toggle" title="Toggle Light / Dark Theme">
+          <span class="theme-toggle-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-14.07 1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2m-4.93-7.07-1.41 1.41M6.34 17.66l-1.41 1.41"/></svg>
+          </span>
+          <span class="theme-toggle-text">Light</span>
+        </button>
+
+        <button class="btn-utility btn-assumptions" id="btn-open-assumptions" title="Simulation Constants & Hardware Assumptions">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Assumptions</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ============================================================
+       MAIN
+  ============================================================ -->
+  <main class="main-content">
+
+    <!-- ============================================================
+         TAB 1: CREATE (How It Works)
+    ============================================================ -->
+    <div class="app-mode-view" id="view-how-it-works">
+
+      <!-- Hero -->
+      <section class="hero-section">
+        <div class="hero-eyebrow">✦ Interactive URL Shortener</div>
+        <h1 class="hero-title">
+          Paste a long URL.<br>
+          <span class="gradient-text">Watch it get shortened.</span>
+        </h1>
+        <p class="hero-sub">Then follow the request through <span class="code-inline">API → Redis → Database</span> in real time.</p>
+
+        <!-- Shorten Form: Compact Developer-Grade Input -->
+        <form id="form-shorten-url" class="shorten-form" autocomplete="off">
+          <div class="shorten-command-bar">
+            <svg class="url-input-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            <input
+              type="url"
+              id="input-long-url"
+              class="url-input"
+              placeholder="Paste URL to shorten (e.g. https://github.com/torvalds/linux)"
+              value="https://github.com/torvalds/linux"
+              required
+            >
+            <button type="submit" id="btn-shorten" class="btn-shorten">
+              <span>Shorten</span>
+              <svg class="btn-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+
+          <!-- Options Drawer -->
+          <details class="options-drawer">
+            <summary class="options-summary">
+              <span>⚙ Options</span>
+              <svg class="chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </summary>
+            <div class="options-grid">
+              <div class="option-field">
+                <label for="select-strategy" class="option-label">ID Strategy</label>
+                <select id="select-strategy" class="option-select">
+                  <option value="base62" selected>Counter + Base62 (Sequential O(1))</option>
+                  <option value="hash">SHA256 + Truncate (Hash-based)</option>
+                  <option value="snowflake">Snowflake 64-bit (Distributed)</option>
+                </select>
+              </div>
+              <div class="option-field">
+                <label class="option-label">Redirect Type</label>
+                <div class="radio-row">
+                  <label class="radio-opt">
+                    <input type="radio" name="redirect_mode" value="302" checked>
+                    <span>302 Temporary</span>
+                  </label>
+                  <label class="radio-opt">
+                    <input type="radio" name="redirect_mode" value="301">
+                    <span>301 Permanent</span>
+                  </label>
+                </div>
+                <div class="redirect-note" id="redirect-explanation-text"></div>
+              </div>
+            </div>
+          </details>
+        </form>
+
+        <!-- Sample URLs -->
+        <div class="sample-chips">
+          <span class="samples-label">Try</span>
+          <button type="button" class="sample-url-chip" data-url="https://github.com/torvalds/linux">linux kernel</button>
+          <button type="button" class="sample-url-chip" data-url="https://blog.bytebytego.com/p/ep1-url-shortener">bytebytego</button>
+          <button type="button" class="sample-url-chip" data-url="https://news.ycombinator.com/item?id=3891234">hacker news</button>
+          <button type="button" class="sample-url-chip" data-url="https://kubernetes.io/docs/concepts/overview/what-is-kubernetes">k8s docs</button>
+        </div>
+      </section>
+
+      <!-- Request Trace Section -->
+      <section class="trace-section">
+        <div class="trace-pipeline-wrap">
+          <div class="section-label">
+            <span class="section-label-dot"></span>
+            Request Flow
+          </div>
+          <div id="trace-pipeline-container" class="pipeline-preview-card">
+            <div class="flow-preview-grid">
+              <div class="flow-preview-node" style="--node-accent: #38bdf8;">
+                <div class="preview-icon-box">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="15" x="2" y="3" rx="2"/><line x1="2" x2="22" y1="8" y2="8"/><circle cx="5" cy="5.5" r="0.75" fill="currentColor"/><circle cx="8" cy="5.5" r="0.75" fill="currentColor"/></svg>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-title">Browser Client</span>
+                  <span class="preview-sub">POST /api/v1/urls</span>
+                </div>
+              </div>
+
+              <div class="preview-flow-arrow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </div>
+
+              <div class="flow-preview-node" style="--node-accent: #a78bfa;">
+                <div class="preview-icon-box">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><line x1="6" x2="6.01" y1="7" y2="7"/><line x1="6" x2="6.01" y1="17" y2="17"/></svg>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-title">API Server</span>
+                  <span class="preview-sub">Base62 ID Generation</span>
+                </div>
+              </div>
+
+              <div class="preview-flow-arrow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </div>
+
+              <div class="flow-preview-node" style="--node-accent: #fb923c;">
+                <div class="preview-icon-box">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-title">Primary DB</span>
+                  <span class="preview-sub">ACID Write & WAL</span>
+                </div>
+              </div>
+
+              <div class="preview-flow-arrow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </div>
+
+              <div class="flow-preview-node" style="--node-accent: #f59e0b;">
+                <div class="preview-icon-box">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-title">Redis Cache</span>
+                  <span class="preview-sub">Warm-Up (SETEX)</span>
+                </div>
+              </div>
+
+              <div class="preview-flow-arrow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </div>
+
+              <div class="flow-preview-node" style="--node-accent: #34d399;">
+                <div class="preview-icon-box">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="16 9 10 15 7 12"/></svg>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-title">201 Response</span>
+                  <span class="preview-sub">JSON Short Link</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="flow-preview-footer">
+              <span class="flow-pulse-dot"></span>
+              <span class="flow-footer-text">Pipeline standby &bull; Click <strong>Shorten</strong> above to trace packet hops across edge, cache, and database</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hop Inspector: full width, no side-by-side -->
+        <div id="hop-inspector-container" class="hop-inspector-wrap"></div>
+
+        <!-- DB Table: Collapsible Explorer -->
+        <details class="db-table-disclosure" id="db-table-disclosure">
+          <summary class="db-table-summary" id="db-table-summary">
+            <div class="db-summary-left">
+              <div class="db-summary-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+              </div>
+              <span class="db-summary-title">Database Storage</span>
+              <span class="db-count-badge"><span id="db-record-count">3</span> records stored</span>
+            </div>
+            <div class="db-summary-right">
+              <span class="db-summary-hint">Inspect schema & records</span>
+              <svg class="chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+          </summary>
+          <div id="db-table-container" class="db-table-wrap"></div>
+        </details>
+      </section>
+
+    </div><!-- end view-how-it-works -->
+
+
+    <!-- ============================================================
+         TAB 2: SCALE (EXACT MATCH WITH REFERENCE)
+    ============================================================ -->
+    <div class="app-mode-view view-hidden" id="view-scale-simulator">
+
+      <!-- Active Failure Banner (Only displayed when Chaos Lab has active outages) -->
+      <!-- Centered page container: keeps banner + architecture + controls within one
+           bounded, centered max-width box so nothing spills past the viewport. -->
+      <div class="scale-page-wrap">
+        <div class="scale-chaos-banner" id="scale-chaos-banner" style="display: none;">
+          <div class="chaos-banner-left">
+            <svg class="chaos-banner-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span class="chaos-banner-text" id="scale-chaos-banner-text">Active Incidents Injected in Chaos Lab</span>
+          </div>
+          <button type="button" class="btn-goto-chaos" id="btn-goto-chaos">Open Chaos Console →</button>
+        </div>
+
+        <div class="scale-ref-layout">
+        
+        <!-- LEFT COLUMN: LIVE ARCHITECTURE -->
+        <div class="scale-arch-panel">
+          <div class="panel-section-title">Live Architecture</div>
+
+          <div class="arch-stack">
+            <!-- Node 1: Client / Browser -->
+            <div class="arch-card" id="arch-node-client">
+              <div class="arch-card-top">
+                <div class="arch-icon-circle client-icon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="15" x="2" y="3" rx="2"/><line x1="2" x2="22" y1="8" y2="8"/><circle cx="5" cy="5.5" r="0.75" fill="currentColor"/><circle cx="8" cy="5.5" r="0.75" fill="currentColor"/></svg>
+                </div>
+                <div class="arch-card-meta">
+                  <div class="arch-card-title">Client / Browser</div>
+                  <div class="arch-card-sub">users opening short links</div>
+                </div>
+              </div>
+              <div class="arch-card-footer-stats">
+                <span>offered <strong id="arch-client-offered">1.0k req/s</strong></span>
+                <span>reads <strong id="arch-client-reads">95%</strong></span>
+              </div>
+            </div>
+
+            <!-- Flow Connector 1: Client -> (LB or API) -->
+            <div class="arch-flow-connector" id="flow-conn-client-lb" data-flow="healthy">
+              <svg class="flow-svg" viewBox="0 0 24 28" preserveAspectRatio="none">
+                <line class="flow-bg-line" x1="12" y1="0" x2="12" y2="28" />
+                <line class="flow-active-line" x1="12" y1="0" x2="12" y2="28" />
+              </svg>
+            </div>
+
+            <!-- Optional Node: Load Balancer (Shown when servers > 1) -->
+            <div class="arch-card" id="arch-node-lb" style="display:none;">
+              <div class="arch-card-top">
+                <div class="arch-icon-circle lb-icon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="6" x="3" y="3" rx="2"/><path d="M7 9v4m10-4v4M12 9v12M8 21h8"/></svg>
+                </div>
+                <div class="arch-card-meta">
+                  <div class="arch-card-title">Load Balancer</div>
+                  <div class="arch-card-sub">Round-robin L4/L7 router</div>
+                </div>
+              </div>
+              <div class="arch-card-footer-stats">
+                <span>routing to <strong id="arch-lb-servers">1</strong> nodes</span>
+                <span>overhead <strong>0.5ms</strong></span>
+              </div>
+            </div>
+
+            <!-- Flow Connector 2: LB -> API (Shown when LB active) -->
+            <div class="arch-flow-connector" id="flow-conn-lb-api" data-flow="healthy" style="display:none;">
+              <svg class="flow-svg" viewBox="0 0 24 28" preserveAspectRatio="none">
+                <line class="flow-bg-line" x1="12" y1="0" x2="12" y2="28" />
+                <line class="flow-active-line" x1="12" y1="0" x2="12" y2="28" />
+              </svg>
+            </div>
+
+            <!-- Node 2: API Servers -->
+            <div class="arch-card" id="arch-node-api">
+              <div class="arch-card-top">
+                <div class="arch-icon-circle api-icon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+                </div>
+                <div class="arch-card-meta">
+                  <div class="arch-card-title-row">
+                    <span class="arch-card-title">API Server</span>
+                    <span class="arch-badge-scale" id="arch-api-badge" style="display:none;">x1</span>
+                    <span class="arch-badge-bottleneck" id="arch-api-bottleneck-badge" style="display:none;">BOTTLENECK</span>
+                  </div>
+                  <div class="arch-card-sub">validates & routes requests</div>
+                </div>
+              </div>
+
+              <!-- Progress Bar -->
+              <div class="arch-bar-wrap">
+                <div class="arch-bar-head">
+                  <span>LOAD</span>
+                  <span id="arch-api-load-pct">10%</span>
+                </div>
+                <div class="arch-bar-track">
+                  <div class="arch-bar-fill" id="arch-api-fill" style="width: 10%;"></div>
+                </div>
+              </div>
+
+              <div class="arch-card-footer-stats">
+                <span>latency <strong id="arch-api-latency">2ms</strong></span>
+                <span>capacity <strong id="arch-api-capacity">30k/s</strong></span>
+              </div>
+            </div>
+
+            <!-- Flow Connector 3: API -> Redis (Shown only when redis enabled) -->
+            <div class="arch-flow-connector" id="arch-redis-connector-top" data-flow="healthy" style="display:none;">
+              <svg class="flow-svg" viewBox="0 0 24 28" preserveAspectRatio="none">
+                <line class="flow-bg-line" x1="12" y1="0" x2="12" y2="28" />
+                <line class="flow-active-line" x1="12" y1="0" x2="12" y2="28" />
+              </svg>
+            </div>
+
+            <!-- Node 3: Redis Cache (Hidden by default, shown via toggle) -->
+            <div class="arch-card" id="arch-node-redis" style="display: none;">
+              <div class="arch-card-top">
+                <div class="arch-icon-circle redis-icon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </div>
+                <div class="arch-card-meta">
+                  <div class="arch-card-title-row">
+                    <span class="arch-card-title">Redis Cache</span>
+                    <span class="arch-badge-scale" id="arch-redis-hit-badge">80% hit</span>
+                  </div>
+                  <div class="arch-card-sub">in-memory fast reads (~1ms)</div>
+                </div>
+              </div>
+
+              <!-- Progress Bar -->
+              <div class="arch-bar-wrap">
+                <div class="arch-bar-head">
+                  <span>HIT RATE</span>
+                  <span id="arch-redis-hit-pct">80%</span>
+                </div>
+                <div class="arch-bar-track">
+                  <div class="arch-bar-fill fill-redis" id="arch-redis-fill" style="width: 80%;"></div>
+                </div>
+              </div>
+
+              <div class="arch-card-footer-stats">
+                <span>absorbs <strong id="arch-redis-absorbed">800/s</strong></span>
+                <span>latency <strong id="arch-redis-latency">1ms</strong></span>
+              </div>
+            </div>
+
+            <!-- Flow Connector 4: (API/Redis) -> DB -->
+            <div class="arch-flow-connector" id="flow-conn-api-db" data-flow="healthy">
+              <svg class="flow-svg" viewBox="0 0 24 28" preserveAspectRatio="none">
+                <line class="flow-bg-line" x1="12" y1="0" x2="12" y2="28" />
+                <line class="flow-active-line" x1="12" y1="0" x2="12" y2="28" />
+              </svg>
+            </div>
+
+            <!-- Node 4: Database -->
+            <div class="arch-card" id="arch-node-db">
+              <div class="arch-card-top">
+                <div class="arch-icon-circle db-icon">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                </div>
+                <div class="arch-card-meta">
+                  <div class="arch-card-title-row">
+                    <span class="arch-card-title">Database</span>
+                    <span class="arch-badge-scale" id="arch-db-replicas-badge" style="display:none;">+1 replica</span>
+                    <span class="arch-badge-bottleneck" id="arch-db-bottleneck-badge" style="display:none;">BOTTLENECK</span>
+                  </div>
+                  <div class="arch-card-sub" id="arch-db-sub">source of truth (Postgres)</div>
+                </div>
+              </div>
+
+              <!-- Progress Bar -->
+              <div class="arch-bar-wrap">
+                <div class="arch-bar-head">
+                  <span>LOAD</span>
+                  <span id="arch-db-load-pct">10%</span>
+                </div>
+                <div class="arch-bar-track">
+                  <div class="arch-bar-fill" id="arch-db-fill" style="width: 10%;"></div>
+                </div>
+              </div>
+
+              <div class="arch-card-footer-stats">
+                <span>reads <strong id="arch-db-reads">950/s</strong></span>
+                <span>latency <strong id="arch-db-latency">44ms</strong></span>
+                <span>capacity <strong id="arch-db-capacity">10k/s</strong></span>
+              </div>
+            </div>
+
+            <!-- Requests piling up alert card (Appears dynamically below DB when overloaded) -->
+            <div class="db-overload-alert" id="db-overload-alert" style="display: none;">
+              <div class="db-overload-head">
+                <span class="alert-pulse-dot"></span>
+                <span>DATABASE SATURATED &mdash; REQUESTS PILING UP</span>
+              </div>
+              <div class="db-overload-sub" id="db-overload-sub">~3.6k requests queued & waiting · +1.0k/s and climbing</div>
+            </div>
+
+          </div>
+        </div>
+
+
+        <!-- RIGHT COLUMN: CONTROLS & TELEMETRY -->
+        <div class="scale-controls-panel">
+
+          <!-- 1. TRAFFIC SLIDER (Primary input) -->
+          <div class="ref-card traffic-ref-card">
+            <div class="ref-card-header">
+              <span class="ref-card-title">TRAFFIC</span>
+              <span class="traffic-headline-val" id="val-traffic-display">1.0k <span class="unit">req/sec</span></span>
+            </div>
+            <div class="traffic-slider-wrap">
+              <input type="range" class="ref-gradient-slider system-slider traffic-slider" id="slider-traffic" min="100" max="100000" step="500" value="1000">
+              <div class="slider-tick-labels">
+                <span>100</span>
+                <span>1.0k</span>
+                <span>5.0k</span>
+                <span>10k</span>
+                <span>25k</span>
+                <span>50k</span>
+                <span>100k</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. INFRASTRUCTURE CARD -->
+          <div class="ref-card infra-ref-card">
+            <div class="ref-card-header">
+              <span class="ref-card-title">INFRASTRUCTURE</span>
+              <button type="button" class="btn-ref-reset" id="btn-reset-infra" title="Reset everything back to startup state">↺ Reset to Initial State</button>
+            </div>
+
+            <!-- Add Cache Toggle Button -->
+            <button type="button" class="btn-add-cache" id="btn-toggle-redis">
+              <svg class="cache-btn-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span class="cache-btn-text" id="btn-cache-text">Add Cache (Redis)</span>
+            </button>
+
+            <!-- Stepper Controls Side-by-Side -->
+            <div class="steppers-grid">
+              <div class="stepper-box">
+                <div class="stepper-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/></svg>
+                  API servers
+                </div>
+                <div class="stepper-controls">
+                  <button type="button" class="btn-step" id="btn-api-minus">−</button>
+                  <span class="step-val" id="val-api-count">1</span>
+                  <button type="button" class="btn-step" id="btn-api-plus">+</button>
+                </div>
+              </div>
+
+              <div class="stepper-box">
+                <div class="stepper-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                  Read replicas
+                </div>
+                <div class="stepper-controls">
+                  <button type="button" class="btn-step" id="btn-replica-minus">−</button>
+                  <span class="step-val" id="val-replica-count">0</span>
+                  <button type="button" class="btn-step" id="btn-replica-plus">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. METRICS 2X2 GRID -->
+          <div class="ref-metrics-grid">
+            <div class="metric-ref-tile">
+              <div class="tile-header">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                AVG LATENCY
+              </div>
+              <div class="tile-value" id="metric-avg-latency">46ms</div>
+              <div class="tile-sub">client → API → DB</div>
+            </div>
+
+            <div class="metric-ref-tile">
+              <div class="tile-header">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                THROUGHPUT
+              </div>
+              <div class="tile-value" id="metric-throughput">1.0k/s</div>
+              <div class="tile-sub" id="metric-throughput-sub">all requests served</div>
+            </div>
+
+            <div class="metric-ref-tile">
+              <div class="tile-header">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                DB LOAD
+              </div>
+              <div class="tile-value" id="metric-db-load">1.0k/s</div>
+              <div class="tile-sub" id="metric-db-load-sub">10% CPU</div>
+            </div>
+
+            <div class="metric-ref-tile">
+              <div class="tile-header">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                CACHE HIT RATE
+              </div>
+              <div class="tile-value" id="metric-cache-hit">N/A</div>
+              <div class="tile-sub" id="metric-cache-sub">no cache yet</div>
+            </div>
+          </div>
+
+          <!-- 4. MINI GRAPH (COMPACT ~150px) -->
+          <div class="ref-card mini-graph-card">
+            <div class="mini-graph-legend">
+              <span class="legend-item"><span class="legend-circle lat"></span> latency (ms)</span>
+              <span class="legend-item"><span class="legend-circle load"></span> peak load (%)</span>
+            </div>
+            <div class="mini-graph-canvas-wrap">
+              <canvas id="traffic-graph-canvas"></canvas>
+            </div>
+          </div>
+
+          <!-- 5. BOTTOM SYSTEM LESSON CARD -->
+          <div class="system-lesson-card healthy" id="system-lesson-card">
+            <div class="lesson-title" id="lesson-title">🟢 All systems healthy</div>
+            <div class="lesson-body" id="lesson-body">Lots of headroom. Drag traffic up toward 10k+ and watch the database CPU bar.</div>
+            <div class="lesson-action" id="lesson-action">↳ The DB breaks first: that is the lesson.</div>
+          </div>
+
+        </div>
+      </div>
+      </div><!-- end .scale-page-wrap -->
+
+      <!-- Detailed System Breakdown Accordion -->
+      <details class="metrics-disclosure" id="metrics-disclosure" open>
+        <summary class="disclosure-summary">
+          <div class="summary-left">
+            <svg class="summary-title-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            <span>Detailed Breakdown</span>
+            <span class="summary-badge">Math & Formulas</span>
+          </div>
+          <svg class="chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </summary>
+        <div class="disclosure-body metrics-disclosure-body">
+          <div class="metrics-grid" id="metrics-grid"></div>
+        </div>
+      </details>
+
+      <!-- Interactive Change History Timeline Section -->
+      <details class="ledger-details" id="ledger-details" open>
+        <summary class="disclosure-summary">
+          <div class="summary-left">
+            <svg class="summary-title-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+            <span>Change History (<span id="history-count">1</span>)</span>
+            <span class="summary-badge">Interactive Timeline</span>
+          </div>
+          <div class="summary-right-actions">
+            <button type="button" class="btn-clear-history" id="btn-clear-history">Clear</button>
+            <svg class="chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </summary>
+        <div class="disclosure-body ledger-body">
+          <!-- Timeline Filters -->
+          <div class="history-filter-bar">
+            <button type="button" class="history-filter-chip active" data-filter="all">All Events</button>
+            <button type="button" class="history-filter-chip" data-filter="scaling">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 16 4-4 4 4 6-6"/><path d="M14 6h7v7"/></svg>
+              <span>Scaling</span>
+            </button>
+            <button type="button" class="history-filter-chip" data-filter="bottleneck">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>Bottlenecks</span>
+            </button>
+            <button type="button" class="history-filter-chip" data-filter="cache">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              <span>Cache</span>
+            </button>
+          </div>
+          <div class="history-timeline" id="history-timeline">
+            <!-- Populated dynamically with interactive timeline items -->
+          </div>
+        </div>
+      </details>
+
+    </div><!-- end view-scale-simulator -->
+
+
+    <!-- ============================================================
+         TAB 3: CHALLENGES
+    ============================================================ -->
+    <div class="app-mode-view view-hidden" id="view-challenges">
+      <div id="challenge-container"></div>
+    </div>
+
+
+    <!-- ============================================================
+         TAB 4: BREAK IT (Chaos Lab)
+    ============================================================ -->
+    <div class="app-mode-view view-hidden" id="view-chaos-lab">
+      <div id="chaos-container"></div>
+    </div>
+
+  </main>
+
+
+  <!-- ============================================================
+       ASSUMPTIONS MODAL
+  ============================================================ -->
+  <div class="modal-overlay modal-hidden" id="assumptions-modal">
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-header">
+        <h3 id="modal-title">⚙ Simulation Assumptions</h3>
+        <button class="btn-modal-close" id="btn-close-assumptions" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">These values govern the mathematical simulation model. Adjust to test different hardware profiles and observe how the system responds.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="input-asm-api-cap">API Node Capacity (req/s per node)</label>
+            <input type="number" id="input-asm-api-cap" class="form-input" value="10000">
+          </div>
+          <div class="form-group">
+            <label for="input-asm-redis-cap">Redis Cluster Capacity (ops/s)</label>
+            <input type="number" id="input-asm-redis-cap" class="form-input" value="500000">
+          </div>
+          <div class="form-group">
+            <label for="input-asm-db-write-cap">Primary DB Write Capacity (writes/s)</label>
+            <input type="number" id="input-asm-db-write-cap" class="form-input" value="10000">
+          </div>
+          <div class="form-group">
+            <label for="input-asm-db-read-cap">Read Replica Capacity (reads/s)</label>
+            <input type="number" id="input-asm-db-read-cap" class="form-input" value="50000">
+          </div>
+          <div class="form-group">
+            <label for="input-asm-net-lat">Base Network Latency (ms)</label>
+            <input type="number" step="0.5" id="input-asm-net-lat" class="form-input" value="6">
+          </div>
+          <div class="form-group">
+            <label for="input-asm-db-lat">Indexed DB Query Latency (ms)</label>
+            <input type="number" step="1" id="input-asm-db-lat" class="form-input" value="12">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="btn-save-assumptions">Save & Recalculate</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
