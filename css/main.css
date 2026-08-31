@@ -209,7 +209,7 @@ code, pre {
    GLOBAL HEADER & TOP NAVIGATION
    ===================================================== */
 /* =====================================================
-   SITE HEADER: UNIFIED 1-ROW DEVELOPER TOOLBAR
+   SITE HEADER: UNIFIED DEVELOPER TOOLBAR
    ===================================================== */
 .site-header {
   position: sticky;
@@ -219,21 +219,80 @@ code, pre {
   backdrop-filter: blur(20px) saturate(1.8);
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   border-bottom: 1px solid var(--border-subtle);
-  height: 56px;
-  display: flex;
-  align-items: center;
-  padding: 0 1.5rem;
+  width: 100%;
+  box-sizing: border-box;
   transition: background-color 0.2s, border-color 0.2s;
 }
 
-.header-nav-container {
-  max-width: 1360px;
-  width: 100%;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.25rem;
+@media (min-width: 1025px) {
+  .site-header {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    padding: 0 1.5rem;
+  }
+
+  .header-nav-container {
+    max-width: 1360px;
+    width: 100%;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem;
+  }
+}
+
+@media (max-width: 1024px) {
+  .site-header {
+    padding: 0.65rem 1rem 0.6rem;
+  }
+
+  .header-nav-container {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "brand utils"
+      "tabs tabs";
+    row-gap: 0.65rem;
+    column-gap: 0.75rem;
+    align-items: center;
+  }
+
+  .brand-group {
+    grid-area: brand;
+    justify-self: start;
+  }
+
+  .header-utilities {
+    grid-area: utils;
+    justify-self: end;
+    gap: 0.45rem;
+  }
+
+  .header-tabs {
+    grid-area: tabs;
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 3px;
+    gap: 3px;
+  }
+
+  .header-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-tab-btn {
+    flex: 1 0 auto;
+    justify-content: center;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.74rem;
+    min-height: 38px;
+  }
 }
 
 /* Left: Brand */
@@ -1736,45 +1795,9 @@ html[data-theme="light"] .url-input-wrap {
    RESPONSIVE (MOBILE & TABLET ADAPTATION)
    ===================================================== */
 @media (max-width: 1024px) {
-  .site-header {
-    padding: 0 1rem;
-  }
   .main-content {
     padding: 0 1rem 4rem;
   }
-}
-
-@media (max-width: 860px) {
-  .site-header {
-    height: auto;
-    padding: 0.6rem 1rem;
-  }
-
-  .header-nav-container {
-    flex-wrap: wrap;
-    gap: 0.65rem;
-  }
-
-  .header-tabs {
-    order: 3;
-    width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    justify-content: flex-start;
-    padding: 4px;
-  }
-  .header-tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nav-tab-btn {
-    flex: 1 0 auto;
-    justify-content: center;
-    padding: 0.45rem 0.75rem;
-    min-height: 38px;
-  }
-
   .trace-inspector-grid {
     flex-direction: column;
   }
