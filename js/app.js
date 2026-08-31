@@ -10,6 +10,12 @@ import { BottleneckEngine } from './bottleneck.js';
 import { ChallengeModeManager } from './challenges.js';
 import { ChaosLabManager } from './chaos.js';
 import { TrafficGraph } from './graph.js';
+import { inject } from '@vercel/analytics';
+
+// Initialize Vercel Web Analytics
+try {
+  inject();
+} catch (_) {}
 
 class ApplicationController {
   constructor() {

@@ -36,3 +36,4 @@ dist-ssr
 # AI & Temp agent directories
 .gemini
 .agents
+.env*
