@@ -3,6 +3,7 @@
  * Connects Model, Tracer, Bottleneck Engine, Chaos Lab, Challenges, Graph, and UI.
  */
 
+import { inject } from '@vercel/analytics';
 import { SimulationModel } from './model.js';
 import { DEFAULT_CONFIG, SCENARIO_PRESETS } from './config.js';
 import { RequestTracer } from './tracer.js';
@@ -16,6 +17,9 @@ import { inject } from '@vercel/analytics';
 try {
   inject();
 } catch (_) {}
+
+// Initialize Vercel Analytics
+inject();
 
 class ApplicationController {
   constructor() {
