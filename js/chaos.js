@@ -25,6 +25,8 @@ export class ChaosLabManager {
       extraLatencyMs: 0
     };
 
+    this.liveChaosEnabled = false;
+
     this.incidentTimeline = [
       {
         id: 'init',
@@ -109,7 +111,13 @@ export class ChaosLabManager {
             <p class="chaos-desc">Inject targeted infrastructure failures to evaluate blast radius, causal degradation, and fault tolerance.</p>
           </div>
 
-          <div class="header-actions-side">
+          <div class="header-actions-side" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="chaos-live-box" style="display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.04);border:1px solid ${this.liveChaosEnabled ? 'rgba(239,68,68,0.45)' : 'rgba(255,255,255,0.1)'};padding:4px 10px;border-radius:20px;">
+              <span style="font-size:0.68rem;font-weight:700;color:var(--t2);">Live Backend Chaos:</span>
+              <button type="button" class="btn-toggle-live-chaos" id="btn-toggle-live-chaos" style="font-size:0.64rem;font-weight:800;padding:2px 8px;border-radius:10px;border:none;cursor:pointer;background:${this.liveChaosEnabled ? '#ef4444' : 'rgba(255,255,255,0.1)'};color:${this.liveChaosEnabled ? '#fff' : 'var(--t3)'};">
+                ${this.liveChaosEnabled ? '● ON' : '○ OFF'}
+              </button>
+            </div>
             <div class="active-counter-badge ${activeFailures.length > 0 ? 'badge-tripped' : 'badge-nominal'}">
               <span class="pulse-indicator">●</span>
               <span>${activeFailures.length === 0 ? '0 Active Incidents' : `${activeFailures.length} Active Incident${activeFailures.length > 1 ? 's' : ''}`}</span>
@@ -154,6 +162,11 @@ export class ChaosLabManager {
                   <button type="button" class="btn-sre-action ${this.failures.redisDown ? 'btn-restore' : 'btn-inject'}" data-failure="redisDown">
                     ${this.failures.redisDown ? '✓ Restore Redis Cache' : 'Simulate Cache Crash'}
                   </button>
+                  ${this.failures.redisDown ? `
+                    <button type="button" class="btn-chaos-demo-trace" data-chaos-fault="redis_failure" style="margin-top:6px;width:100%;font-size:0.68rem;padding:5px 8px;border-radius:6px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);color:#fca5a5;cursor:pointer;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px;">
+                      <span>🔬 Test Real Redis Outage (Tracer) →</span>
+                    </button>
+                  ` : ''}
                 </div>
 
                 <!-- 2. API Server Pod Crash -->
@@ -176,6 +189,11 @@ export class ChaosLabManager {
                   <button type="button" class="btn-sre-action ${this.failures.oneApiNodeDead ? 'btn-restore' : 'btn-inject'}" data-failure="oneApiNodeDead">
                     ${this.failures.oneApiNodeDead ? '✓ Revive API Node' : 'Kill 1 API Server'}
                   </button>
+                  ${this.failures.oneApiNodeDead ? `
+                    <button type="button" class="btn-chaos-demo-trace" data-chaos-fault="api_latency" data-chaos-delay="200" style="margin-top:6px;width:100%;font-size:0.68rem;padding:5px 8px;border-radius:6px;background:rgba(168,85,247,0.12);border:1px solid rgba(168,85,247,0.35);color:#d8b4fe;cursor:pointer;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px;">
+                      <span>🔬 Test Real API Latency (+200ms) →</span>
+                    </button>
+                  ` : ''}
                 </div>
 
                 <!-- 3. Read Replica Offline -->
@@ -231,6 +249,11 @@ export class ChaosLabManager {
                   <button type="button" class="btn-sre-action ${this.failures.dbDown ? 'btn-restore' : 'btn-inject'}" data-failure="dbDown">
                     ${this.failures.dbDown ? '✓ Restore Database' : 'Simulate Master DB Outage'}
                   </button>
+                  ${this.failures.dbDown ? `
+                    <button type="button" class="btn-chaos-demo-trace" data-chaos-fault="db_latency" data-chaos-delay="200" style="margin-top:6px;width:100%;font-size:0.68rem;padding:5px 8px;border-radius:6px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.35);color:#fdba74;cursor:pointer;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px;">
+                      <span>🔬 Test Real DB Latency (+200ms) →</span>
+                    </button>
+                  ` : ''}
                 </div>
 
                 <!-- 5. Drop short_code Index -->
@@ -286,6 +309,11 @@ export class ChaosLabManager {
                   <button type="button" class="btn-sre-action ${this.failures.extraLatencyMs > 0 ? 'btn-restore' : 'btn-inject'}" data-failure="extraLatency">
                     ${this.failures.extraLatencyMs > 0 ? '✓ Clear Network Jitter' : 'Inject 150ms Delay'}
                   </button>
+                  ${this.failures.extraLatencyMs > 0 ? `
+                    <button type="button" class="btn-chaos-demo-trace" data-chaos-fault="redis_latency" data-chaos-delay="200" style="margin-top:6px;width:100%;font-size:0.68rem;padding:5px 8px;border-radius:6px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);color:#fcd34d;cursor:pointer;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px;">
+                      <span>🔬 Test Real Redis Latency (+200ms) →</span>
+                    </button>
+                  ` : ''}
                 </div>
 
               </div>
@@ -423,6 +451,39 @@ export class ChaosLabManager {
   }
 
   attachListeners() {
+    // Live Backend Chaos toggle button
+    const liveToggleBtn = this.containerEl.querySelector('#btn-toggle-live-chaos');
+    if (liveToggleBtn) {
+      liveToggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.liveChaosEnabled = !this.liveChaosEnabled;
+        this.addTimelineEvent({
+          type: this.liveChaosEnabled ? 'warning' : 'success',
+          icon: this.liveChaosEnabled ? '⚡' : '🛡️',
+          title: this.liveChaosEnabled ? 'Live Backend Chaos Enabled (Demo Mode)' : 'Live Backend Chaos Disabled',
+          detail: this.liveChaosEnabled 
+            ? 'Controlled test traces will now transmit real fault headers (X-Chaos-Fault) to the live backend pipeline.' 
+            : 'Normal production routing active. Backend will ignore chaos parameters.'
+        });
+        if (this.onStateChange) {
+          this.onStateChange({ liveChaosEnabled: this.liveChaosEnabled });
+        }
+        this.render();
+      });
+    }
+
+    // Direct Chaos Experiment Trace buttons
+    this.containerEl.querySelectorAll('.btn-chaos-demo-trace').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const fault = e.currentTarget.getAttribute('data-chaos-fault');
+        const delayMs = parseInt(e.currentTarget.getAttribute('data-chaos-delay') || '0', 10);
+        if (window.appDispatcher?.triggerChaosTrace) {
+          window.appDispatcher.triggerChaosTrace({ fault, delayMs });
+        }
+      });
+    });
+
     // Reset All button
     const resetBtn = this.containerEl.querySelector('#btn-reset-chaos');
     if (resetBtn) {

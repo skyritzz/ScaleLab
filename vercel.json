@@ -4,7 +4,20 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "cleanUrls": true,
+  "regions": ["bom1"],
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/health"
+    },
+    {
+      "source": "/:shortCode([a-zA-Z0-9_-]{3,16})",
+      "destination": "/api/redirect?code=$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

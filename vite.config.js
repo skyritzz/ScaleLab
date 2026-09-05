@@ -6,7 +6,22 @@ export default defineConfig({
   server: {
     port: 3000,
     open: false,
-    host: true
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:4000',
+        changeOrigin: true
+      },
+      '^/[a-zA-Z0-9_-]{3,16}$': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.url === '/' || req.url.startsWith('/@') || req.url.includes('.')) {
+            return req.url;
+          }
+        }
+      }
+    }
   },
   build: {
     outDir: 'dist',

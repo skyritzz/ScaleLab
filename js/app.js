@@ -43,6 +43,7 @@ class ApplicationController {
   }
 
   init() {
+    window.appDispatcher = this;
     this.cacheDom();
     this.initModules();
     this.attachEventListeners();
@@ -139,6 +140,8 @@ class ApplicationController {
     );
     this.tracer.renderDatabaseTable();
     if (this.dbRecordCount) this.dbRecordCount.textContent = this.tracer.databaseRecords.length;
+    // Load real persistent records from backend
+    this.tracer.loadDatabaseRecords();
 
     // Traffic Graph with interactive scrub callback
     if (this.graphCanvas) {
@@ -181,6 +184,7 @@ class ApplicationController {
           }
           if (update.redisEnabled !== undefined) this.state.redisEnabled = update.redisEnabled;
           if (update.dbIndexed !== undefined) this.state.dbIndexed = update.dbIndexed;
+          if (update.liveChaosEnabled !== undefined) this.state.liveChaosEnabled = update.liveChaosEnabled;
           this.syncControlsWithState();
           this.updateSimulation(false, 'Chaos Lab Failure Injected');
         },
@@ -384,17 +388,33 @@ class ApplicationController {
     // Shorten Form Submission
     const shortenForm = document.getElementById('form-shorten-url');
     if (shortenForm) {
-      shortenForm.addEventListener('submit', (e) => {
+      shortenForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const urlInput = document.getElementById('input-long-url');
         const strategySelect = document.getElementById('select-strategy');
+        const submitBtn = document.getElementById('btn-shorten');
+        const errorBanner = document.getElementById('shorten-error-banner');
+
+        if (errorBanner) {
+          errorBanner.style.display = 'none';
+          errorBanner.textContent = '';
+        }
+
         let longUrl = urlInput.value.trim();
-        const strategy = strategySelect.value;
+        const strategy = strategySelect ? strategySelect.value : 'base62';
+        const redirectMode = parseInt(document.querySelector('input[name="redirect_mode"]:checked')?.value || this.state.redirectType || '302', 10);
+
         if (longUrl) {
-          // Security: Block unsafe protocols (javascript:, data:, vbscript:, etc.)
+          // Client-side quick check
           const lowerUrl = longUrl.toLowerCase();
           if (lowerUrl.startsWith('javascript:') || lowerUrl.startsWith('data:') || lowerUrl.startsWith('vbscript:') || lowerUrl.startsWith('file:')) {
-            alert('Invalid URL scheme. Only HTTP and HTTPS destination URLs are supported.');
+            const errText = 'Invalid URL scheme. Only HTTP and HTTPS destination URLs are supported.';
+            if (errorBanner) {
+              errorBanner.textContent = errText;
+              errorBanner.style.display = 'flex';
+            } else {
+              alert(errText);
+            }
             return;
           }
 
@@ -404,7 +424,70 @@ class ApplicationController {
             urlInput.value = longUrl;
           }
 
-          this.tracer.runWriteTrace(longUrl, strategy, this.state.redirectType, this.state);
+          // UI Loading state
+          const originalBtnHtml = submitBtn ? submitBtn.innerHTML : 'Shorten';
+          if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.7';
+            submitBtn.innerHTML = `
+              <span style="display:inline-flex;align-items:center;gap:6px;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: hop-pulse 0.8s infinite linear;">
+                  <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+                  <path d="M12 2a10 10 0 0 1 10 10"></path>
+                </svg>
+                <span>Shortening...</span>
+              </span>
+            `;
+          }
+
+          let realData = null;
+          let clientRttMs = 0;
+          const clientReqStart = performance.now();
+          try {
+            const response = await fetch('/api/v1/urls', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                url: longUrl,
+                strategy,
+                redirect_mode: redirectMode
+              })
+            });
+
+            clientRttMs = Math.round((performance.now() - clientReqStart) * 10) / 10;
+            const result = await response.json();
+
+            if (!response.ok || result.status !== 'success') {
+              throw new Error(result.message || `Request failed with status ${response.status}`);
+            }
+
+            realData = result;
+          } catch (err) {
+            console.error('[Shorten] API request failed:', err);
+            const errText = `Could not shorten URL: ${err.message}`;
+            if (errorBanner) {
+              errorBanner.textContent = errText;
+              errorBanner.style.display = 'flex';
+            } else {
+              alert(errText);
+            }
+            return;
+          } finally {
+            if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.style.opacity = '1';
+              submitBtn.innerHTML = originalBtnHtml;
+            }
+          }
+
+          // Automatically expand DB disclosure table so user sees the newly persisted link
+          const dbDisclosure = document.getElementById('db-table-disclosure');
+          if (dbDisclosure) {
+            dbDisclosure.open = true;
+          }
+
+          // Animate tracer with real backend data & client RTT
+          await this.tracer.runWriteTrace(longUrl, strategy, String(redirectMode), this.state, realData, clientRttMs);
 
           setTimeout(() => {
             const traceSection = document.querySelector('.trace-section');
@@ -1300,6 +1383,23 @@ class ApplicationController {
   visitShortUrl(shortCode, redirectType) {
     this.switchMode('how-it-works');
     this.tracer.runReadTrace(shortCode, redirectType, this.state);
+  }
+
+  async triggerChaosTrace({ fault, delayMs = 200 }) {
+    this.switchMode('how-it-works');
+    // Ensure table is loaded or pick first record
+    let shortCode = (this.tracer?.databaseRecords && this.tracer.databaseRecords[0]?.shortCode) || '10008';
+    const redirectType = document.querySelector('input[name="redirect_mode"]:checked')?.value || this.state.redirectType || '302';
+    
+    // Scroll smoothly to Request Tracer
+    setTimeout(() => {
+      const traceSection = document.querySelector('.trace-section');
+      if (traceSection) {
+        traceSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
+
+    await this.tracer.runReadTrace(shortCode, redirectType, this.state, { fault, delayMs });
   }
 
   populateAssumptionsForm() {

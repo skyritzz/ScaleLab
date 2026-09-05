@@ -50,6 +50,31 @@ export class RequestTracer {
   }
 
   /**
+   * Fetch real stored database records from GET /api/v1/urls
+   */
+  async loadDatabaseRecords() {
+    try {
+      const res = await fetch('/api/v1/urls');
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json && Array.isArray(json.data) && json.data.length > 0) {
+        this.databaseRecords = json.data.map(r => ({
+          id: r.id,
+          shortCode: r.short_code,
+          longUrl: r.long_url,
+          createdAt: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          accessCount: r.access_count || 0,
+          inCache: true
+        }));
+        this.renderDatabaseTable();
+        if (this.onRecordCreated) this.onRecordCreated();
+      }
+    } catch (err) {
+      console.warn('[Tracer] Using fallback simulator records (backend unreachable):', err.message);
+    }
+  }
+
+  /**
    * Base62 encoding utility
    */
   encodeBase62(num) {
@@ -96,12 +121,18 @@ export class RequestTracer {
   /**
    * Run Write Trace: POST /api/v1/urls
    */
-  async runWriteTrace(longUrl, strategy, redirectType, appState) {
+  async runWriteTrace(longUrl, strategy, redirectType, appState, realData = null, clientRttMs = 0) {
     if (this.isTracing) return;
     this.isTracing = true;
 
-    const shortCode = this.generateShortCode(longUrl, strategy);
-    const shortUrl = `https://sho.rt/${shortCode}`;
+    const isReal = Boolean(realData && realData.telemetry);
+    const tel = realData?.telemetry || {};
+
+    const shortCode = realData?.short_code || this.generateShortCode(longUrl, strategy);
+    const shortUrl = realData?.short_url || `/${shortCode}`;
+    const createdAt = realData?.created_at
+      ? new Date(realData.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : new Date().toLocaleTimeString();
 
     // Define the sequence of hops for URL Creation
     const hops = [
@@ -110,75 +141,88 @@ export class RequestTracer {
         label: 'Browser / Client',
         icon: '💻',
         role: 'Originating Client',
-        request: `POST /api/v1/urls HTTP/1.1\nHost: api.sho.rt\nContent-Type: application/json\nUser-Agent: Mozilla/5.0\n\n{\n  "url": "${longUrl}",\n  "custom_alias": null\n}`,
-        whatIsHappening: 'Client serializes the target URL into a JSON payload and sends an HTTP POST request over TLS to the API load balancer.',
-        whyExists: 'Users and upstream services initiate shortening requests here. Clients require quick HTTP 201 Created responses containing the short link.',
+        isRealExecution: isReal,
+        durationMs: clientRttMs || 14,
+        request: `POST /api/v1/urls HTTP/1.1\nHost: ${window.location.host || 'api.sho.rt'}\nContent-Type: application/json\nUser-Agent: Mozilla/5.0\n\n{\n  "url": "${longUrl}",\n  "strategy": "${strategy}",\n  "redirect_mode": ${redirectType}\n}`,
+        whatIsHappening: isReal
+          ? `REAL HTTP POST dispatched over network. Browser performance API measured round-trip time (RTT) at ${clientRttMs}ms.`
+          : 'Client serializes target URL into JSON payload and sends HTTP POST request over TLS to the API gateway.',
+        whyExists: 'Users and upstream services initiate shortening requests here. Clients require fast HTTP 201 Created responses containing the short link.',
         commandOrSql: null,
-        response: `HTTP/1.1 201 Created\nContent-Type: application/json\n\n{\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "created_at": "${new Date().toISOString()}"\n}`,
-        durationMs: 4
+        response: `HTTP/1.1 201 Created\nContent-Type: application/json\n\n{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "created_at": "${realData?.created_at || new Date().toISOString()}"\n}`
       },
       {
         id: 'api',
         label: 'API Server',
         icon: '⚙️',
         role: 'Stateless Application Server',
-        request: `POST /api/v1/urls\nPayload: { "url": "${longUrl}" }`,
-        whatIsHappening: `Validates URL syntax, applies rate limiting, generates unique short code '${shortCode}' using strategy '${strategy}'.`,
+        isRealExecution: isReal,
+        durationMs: tel.server_duration_ms || 4,
+        request: `POST /api/v1/urls\nPayload: { "url": "${longUrl}", "strategy": "${strategy}", "redirect_mode": ${redirectType} }`,
+        whatIsHappening: isReal
+          ? `REAL SERVER EXECUTION: Server validated destination URL syntax and SSRF safety, generated unique short code '${shortCode}', and coordinated database persistence in ${tel.server_duration_ms}ms.`
+          : `Validates URL syntax, applies rate limiting, generates unique short code '${shortCode}' using strategy '${strategy}'.`,
         whyExists: 'Stateless API servers handle business logic, authentication, request validation, and encoding. They can scale horizontally by adding nodes.',
         commandOrSql: strategy === 'base62' 
-          ? `// Base62 Encoding:\nID = atomic_next_id(); // ${this.counter}\nshort_code = base62_encode(ID); // '${shortCode}'`
+          ? `// Base62 Sequence Generation:\nID = atomic_next_id(); // PostgreSQL urls_id_seq\nshort_code = base62_encode(ID); // '${shortCode}'`
           : `// Hash & Collision Check:\nhash = sha256("${longUrl}").take(7); // '${shortCode}'`,
-        response: `Generated Short Code: '${shortCode}' -> Dispatches write to Primary DB`,
-        durationMs: 2
+        response: `Generated Short Code: '${shortCode}' -> Dispatched ACID transaction to Primary DB`
       },
       {
         id: 'db',
-        label: 'Primary Database',
+        label: 'Primary Database (PostgreSQL)',
         icon: '🗄️',
         role: 'Relational Database (Write Master)',
-        request: `INSERT INTO urls (short_code, long_url, created_at, access_count)\nVALUES ('${shortCode}', '${longUrl}', NOW(), 0);`,
-        whatIsHappening: `Primary database acquires a write lock, inserts the mapping record into the 'urls' table, updates the B-Tree index, and flushes to the Write-Ahead Log (WAL).`,
+        isRealExecution: isReal,
+        durationMs: tel.db_duration_ms || 14,
+        request: `INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;`,
+        whatIsHappening: isReal
+          ? `REAL DB TRANSACTION: Executed parameterized INSERT query in PostgreSQL in ${tel.db_duration_ms}ms. Committed to Write-Ahead Log (WAL) with UNIQUE constraint guarantee.`
+          : `Primary database acquires write lock, inserts mapping record into 'urls' table, updates B-Tree index, and flushes to WAL.`,
         whyExists: 'Relational databases guarantee ACID durability and uniqueness constraints (UNIQUE index on short_code) so short URLs are never overwritten.',
-        commandOrSql: `INSERT INTO urls (short_code, long_url, created_at, access_count)\nVALUES ('${shortCode}', '${longUrl}', NOW(), 0)\nRETURNING id, short_code, created_at;`,
-        response: `Query OK, 1 row affected (0.014 sec)\nInserted Record ID: ${this.databaseRecords.length + 1}`,
-        durationMs: 14
+        commandOrSql: `INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;`,
+        response: `Query OK, 1 row affected (Duration: ${tel.db_duration_ms || 14}ms)\nCommitted short_code: '${shortCode}'`
       },
       {
         id: 'redis_optional',
-        label: 'Redis Cache (Optional Pre-warm)',
+        label: 'Redis Cache (Pre-warm)',
         icon: '⚡',
         role: 'In-Memory Key-Value Store',
-        request: `SETEX urls:${shortCode} 86400 "${longUrl}"`,
-        whatIsHappening: appState.redisEnabled 
-          ? `API optionally pre-warms Redis with the new short code mapping with a 24h TTL to ensure future reads are instant cache hits.`
-          : `Redis is DISABLED. Skipping cache warm-up.`,
+        isRealExecution: isReal,
+        durationMs: tel.redis_duration_ms || 1.2,
+        request: `SETEX urls:${shortCode} 86400 "{\\"id\\":${realData?.id || 1},\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
+        whatIsHappening: isReal
+          ? `REAL CACHE PRE-WARM: API pre-warmed Redis key 'urls:${shortCode}' with a 24-hour TTL in ${tel.redis_duration_ms}ms. Next visitor gets an instant CACHE HIT without querying the database.`
+          : `API pre-warms Redis with the new short code mapping with a 24h TTL to ensure future reads are instant cache hits.`,
         whyExists: 'Pre-warming newly created links prevents immediate cache misses if the URL is shared and visited immediately.',
-        commandOrSql: appState.redisEnabled ? `SETEX urls:${shortCode} 86400 "${longUrl}"` : `// Caching disabled`,
-        response: appState.redisEnabled ? `OK` : `Bypassed`,
-        durationMs: appState.redisEnabled ? 1 : 0
+        commandOrSql: `SETEX urls:${shortCode} 86400 "{\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
+        response: tel.redis_cached !== false ? `OK (Cached in ${tel.redis_duration_ms || 1.2}ms)` : `Bypassed/Degraded`
       },
       {
         id: 'response',
         label: 'HTTP 201 Response',
         icon: '✅',
         role: 'Client Response Delivery',
-        request: `HTTP/1.1 201 Created\nLocation: /api/v1/urls/${shortCode}`,
-        whatIsHappening: 'API returns HTTP 201 Created with JSON metadata and the ready-to-use short URL.',
+        isRealExecution: isReal,
+        durationMs: 1,
+        request: `HTTP/1.1 201 Created\nLocation: ${shortUrl}\nServer-Timing: server;dur=${tel.server_duration_ms || 15}, db;dur=${tel.db_duration_ms || 12}, redis;dur=${tel.redis_duration_ms || 1}`,
+        whatIsHappening: isReal
+          ? `REAL RESPONSE: API delivered HTTP 201 Created with short URL '${shortUrl}' and full server-timing telemetry headers.`
+          : 'API returns HTTP 201 Created with JSON metadata and the ready-to-use short URL.',
         whyExists: 'Informs client that the resource was durably persisted.',
         commandOrSql: null,
-        response: `{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "long_url": "${longUrl}"\n}`,
-        durationMs: 2
+        response: `{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "long_url": "${longUrl}"\n}`
       }
     ];
 
     // Store record in local database
     const newRecord = {
-      id: this.databaseRecords.length + 1,
+      id: realData?.id || (this.databaseRecords.length > 0 ? Math.max(...this.databaseRecords.map(r => r.id || 0)) + 1 : 1),
       shortCode,
       longUrl,
-      createdAt: new Date().toLocaleTimeString(),
+      createdAt,
       accessCount: 0,
-      inCache: Boolean(appState.redisEnabled)
+      inCache: true
     };
     this.databaseRecords.unshift(newRecord);
 
@@ -190,9 +234,9 @@ export class RequestTracer {
   }
 
   /**
-   * Run Read Trace: GET /:short_code
+   * Run Read Trace: GET /:short_code (REAL Telemetry via Accept: application/json)
    */
-  async runReadTrace(shortCode, redirectType, appState) {
+  async runReadTrace(shortCode, redirectType, appState, chaosOverride = null) {
     if (this.isTracing) return;
     this.isTracing = true;
 
@@ -210,14 +254,72 @@ export class RequestTracer {
       this.databaseRecords.push(record);
     }
 
-    record.accessCount++;
+    // Determine if chaos should be injected for this specific trace
+    let chaosConfig = chaosOverride;
+    if (!chaosConfig && appState?.liveChaosEnabled) {
+      if (appState.failures?.redisDown) {
+        chaosConfig = { fault: 'redis_failure', delayMs: 0 };
+      } else if (appState.failures?.extraLatencyMs > 0) {
+        chaosConfig = { fault: 'redis_latency', delayMs: appState.failures.extraLatencyMs };
+      } else if (appState.failures?.oneApiNodeDead) {
+        chaosConfig = { fault: 'api_latency', delayMs: 200 };
+      } else if (appState.failures?.dbDown || !appState.dbIndexed) {
+        chaosConfig = { fault: 'db_latency', delayMs: 200 };
+      }
+    }
 
-    const isRedisActive = appState.redisEnabled && !appState.failures?.redisDown;
-    const isCacheHit = isRedisActive && record.inCache;
-    const redirectStatus = redirectType === '301' ? '301 Moved Permanently' : '302 Found';
-    const cacheControlHeader = redirectType === '301' 
+    const reqHeaders = { 'Accept': 'application/json' };
+    if (chaosConfig && chaosConfig.fault) {
+      reqHeaders['X-Chaos-Fault'] = chaosConfig.fault;
+      reqHeaders['X-Chaos-Delay-Ms'] = String(chaosConfig.delayMs || 0);
+      reqHeaders['X-Chaos-Key'] = 'scale-lab-chaos-demo-2026';
+    }
+
+    // Call actual GET /:shortCode endpoint with Accept: application/json and chaos headers if active
+    let realReadData = null;
+    let clientRttMs = 0;
+    const clientReqStart = performance.now();
+
+    try {
+      const response = await fetch(`/${shortCode}`, {
+        method: 'GET',
+        headers: reqHeaders
+      });
+      clientRttMs = Math.round((performance.now() - clientReqStart) * 10) / 10;
+      if (response.ok) {
+        realReadData = await response.json();
+      }
+    } catch (err) {
+      console.warn('[Tracer] Read trace fetch failed, using fallback simulator:', err.message);
+    }
+
+    const isReal = Boolean(realReadData && realReadData.telemetry);
+    const tel = realReadData?.telemetry || {};
+    const isChaos = Boolean(tel.chaos_enabled ?? realReadData?.chaos_enabled);
+    const injectedFault = tel.injected_fault ?? realReadData?.injected_fault ?? null;
+    const injectedDelay = tel.injected_delay_ms ?? realReadData?.injected_delay_ms ?? 0;
+    const isRedisFailure = (injectedFault === 'redis_failure');
+
+    const isCacheHit = isReal
+      ? Boolean(tel.redis_hit ?? realReadData.cache_hit)
+      : (appState.redisEnabled && !appState.failures?.redisDown && record.inCache && !isRedisFailure);
+
+    const dbFallback = isReal
+      ? Boolean(tel.db_fallback ?? realReadData.db_fallback)
+      : (!isCacheHit || isRedisFailure);
+
+    const destinationUrl = realReadData?.destination || record.longUrl;
+    const effectiveRedirectMode = String(realReadData?.redirect_mode || redirectType || '302');
+    const redirectStatus = effectiveRedirectMode === '301' ? '301 Moved Permanently' : '302 Found';
+    const cacheControlHeader = effectiveRedirectMode === '301' 
       ? 'Cache-Control: public, max-age=31536000, immutable' 
       : 'Cache-Control: no-cache, no-store, must-revalidate';
+
+    // Mark as warm in local records if not simulating an outage
+    if (!isRedisFailure) {
+      record.inCache = true;
+    }
+    record.accessCount = (record.accessCount || 0) + 1;
 
     const hops = [];
 
@@ -227,100 +329,176 @@ export class RequestTracer {
       label: 'Browser / Client',
       icon: '💻',
       role: 'User Visiting Short URL',
-      request: `GET /${shortCode} HTTP/1.1\nHost: sho.rt\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)\nAccept: text/html`,
-      whatIsHappening: `User clicks or navigates to https://sho.rt/${shortCode}. Browser sends a standard GET request to the shortener gateway.`,
-      whyExists: 'Every URL access starts with an HTTP GET request.',
+      isRealExecution: isReal,
+      isChaos,
+      injectedFault,
+      durationMs: clientRttMs || 6,
+      request: `GET /${shortCode} HTTP/1.1\nHost: ${window.location.host || 'sho.rt'}\nAccept: text/html,application/json\nUser-Agent: Mozilla/5.0${chaosConfig && chaosConfig.fault ? `\nX-Chaos-Fault: ${chaosConfig.fault}\nX-Chaos-Delay-Ms: ${chaosConfig.delayMs}` : ''}`,
+      whatIsHappening: isReal
+        ? `REAL HTTP GET request dispatched to /${shortCode}. Round-trip network latency measured at ${clientRttMs}ms.${isChaos ? ` (Chaos Mode: Injected Fault '${injectedFault}')` : ''}`
+        : `User clicks or navigates to https://sho.rt/${shortCode}. Browser sends a standard GET request to the shortener gateway.`,
+      whyExists: 'Every URL access starts with an HTTP GET request from an originating client.',
       commandOrSql: null,
-      response: `Pending redirect to ${record.longUrl}...`,
-      durationMs: 5
+      response: `Resolving redirect to ${destinationUrl}...`
     });
 
     // Hop 2: API Routing
+    const apiDuration = tel.actual_server_duration_ms ?? tel.server_duration_ms ?? 2;
     hops.push({
       id: 'api_lookup',
-      label: 'API Server',
+      label: injectedFault === 'api_latency' ? `API Server (+${injectedDelay}ms Latency)` : 'API Server',
       icon: '⚙️',
       role: 'Routing & Cache Dispatcher',
-      request: `GET /${shortCode}\nExtracted Key: urls:${shortCode}`,
-      whatIsHappening: `API server extracts short code '${shortCode}'. Checks in-memory Redis cache first to avoid an expensive database query.`,
+      isRealExecution: isReal,
+      isChaos: injectedFault === 'api_latency',
+      injectedFault,
+      durationMs: apiDuration,
+      request: `GET /${shortCode}\nExtracted Key: urls:${shortCode}${injectedFault === 'api_latency' ? `\n[INJECTED API DELAY: +${injectedDelay}ms]` : ''}`,
+      whatIsHappening: isReal
+        ? `REAL API DISPATCH: Server extracted key 'urls:${shortCode}'. Coordinated cache evaluation and fallback resolution in ${apiDuration}ms.${injectedFault === 'api_latency' ? ` Injected ${injectedDelay}ms API latency successfully.` : ''}`
+        : `API server extracts short code '${shortCode}'. Checks in-memory Redis cache first to avoid an expensive database query.`,
       whyExists: 'In read-heavy architectures (95%+ reads), checking cache first protects the database from read saturation.',
-      commandOrSql: isRedisActive ? `redis.get("urls:${shortCode}")` : `// Redis disabled -> query DB directly`,
-      response: isRedisActive ? `Querying Redis Cluster...` : `Bypassing Redis -> Forwarding to DB`,
-      durationMs: 2
+      commandOrSql: `redis.get("urls:${shortCode}")`,
+      response: isRedisFailure 
+        ? `Simulated Redis crash -> Cascading to PostgreSQL storage` 
+        : (isCacheHit ? `Found key in Redis RAM -> Preparing redirect` : `Cache MISS -> Querying Primary Database`)
     });
 
-    // Hop 3: Redis Cache Check
-    if (isRedisActive) {
+    // Hop 3: Redis Cache Check or Outage
+    if (isRedisFailure) {
+      hops.push({
+        id: 'redis_outage',
+        label: 'Redis [SIMULATED OUTAGE]',
+        icon: '⚡',
+        role: 'In-Memory Cache (Crash Injected)',
+        isRealExecution: isReal,
+        isFailed: true,
+        isChaos: true,
+        injectedFault: 'redis_failure',
+        durationMs: tel.actual_redis_duration_ms ?? tel.redis_duration_ms ?? 1.0,
+        request: `GET urls:${shortCode}\n[SIMULATED FAULT: redis_failure]`,
+        whatIsHappening: `REAL EXECUTION: Real Redis operation intercepted by controlled chaos experiment. Failed fast in ${tel.actual_redis_duration_ms ?? 1.0}ms. API caught outage and cascaded to PostgreSQL fallback.`,
+        whyExists: 'SIMULATED CONTEXT: Cache layers can suffer transient evictions, memory exhaustion, or network partitions. Safe architecture dictates an automatic database fallback to prevent 500 errors.',
+        commandOrSql: `GET urls:${shortCode} -> [SIMULATED_CACHE_CRASH]`,
+        response: 'ERR: Redis Offline -> Fallback to PostgreSQL'
+      });
+    } else if (injectedFault === 'redis_latency') {
       hops.push({
         id: 'redis_check',
-        label: isCacheHit ? 'Redis (CACHE HIT ✅)' : 'Redis (CACHE MISS ⚠️)',
+        label: `Redis Cache (+${injectedDelay}ms Latency)`,
+        icon: '⏱️',
+        role: 'In-Memory Cache with Injected Jitter',
+        isRealExecution: isReal,
+        isChaos: true,
+        injectedFault: 'redis_latency',
+        durationMs: tel.actual_redis_duration_ms ?? tel.redis_duration_ms ?? (1.2 + injectedDelay),
+        isHit: isCacheHit,
+        isMiss: !isCacheHit,
+        request: `GET urls:${shortCode}\n[CHAOS JITTER: +${injectedDelay}ms]`,
+        whatIsHappening: `REAL EXECUTION: Real Redis command executed with +${injectedDelay}ms latency injected. Measured total Redis duration: ${tel.actual_redis_duration_ms ?? tel.redis_duration_ms}ms.`,
+        whyExists: 'SIMULATED CONTEXT: Cross-AZ transit latency or lock contention adds jitter to memory cache queries.',
+        commandOrSql: `GET urls:${shortCode}`,
+        response: isCacheHit ? `"${destinationUrl}" (+${injectedDelay}ms delay)` : `(nil)`
+      });
+    } else {
+      hops.push({
+        id: 'redis_check',
+        label: isCacheHit ? 'Redis Cache (CACHE HIT ✅)' : 'Redis Cache (CACHE MISS ⚠️)',
         icon: isCacheHit ? '⚡' : '🔍',
         role: 'In-Memory Cache (RAM)',
+        isRealExecution: isReal,
+        durationMs: tel.actual_redis_duration_ms ?? tel.redis_duration_ms ?? 1.2,
+        isHit: isCacheHit,
+        isMiss: !isCacheHit,
         request: `GET urls:${shortCode}`,
         whatIsHappening: isCacheHit 
-          ? `CACHE HIT (94% of reads): Key 'urls:${shortCode}' found in Redis memory! Returning long URL in 1.2ms without touching the database.`
-          : `CACHE MISS (6% of reads): Key 'urls:${shortCode}' was not found in Redis RAM (expired or first access). Request must fall through to the database.`,
+          ? (isReal
+              ? `REAL CACHE HIT: Key 'urls:${shortCode}' found in Redis in ${tel.actual_redis_duration_ms ?? tel.redis_duration_ms}ms! Database query completely bypassed.`
+              : `CACHE HIT (94% of reads): Key 'urls:${shortCode}' found in Redis memory! Returning long URL in 1.2ms without touching the database.`)
+          : (isReal
+              ? `REAL CACHE MISS: Key 'urls:${shortCode}' was not found in Redis (${tel.actual_redis_duration_ms ?? tel.redis_duration_ms}ms). Executing fallback query to PostgreSQL.`
+              : `CACHE MISS (6% of reads): Key 'urls:${shortCode}' was not found in Redis RAM (expired or first access). Request must fall through to the database.`),
         whyExists: 'Redis holds active working sets in RAM. Avoiding DB lookups keeps read latency under 2ms and shields the DB replica pool.',
         commandOrSql: `GET urls:${shortCode}`,
-        response: isCacheHit ? `"${record.longUrl}"` : `(nil) [Key Not Found]`,
-        durationMs: 1.2,
-        isHit: isCacheHit,
-        isMiss: !isCacheHit
+        response: isCacheHit ? `"${destinationUrl}" (Latency: ${tel.actual_redis_duration_ms ?? tel.redis_duration_ms ?? 1.2}ms)` : `(nil) [Key Not Found]`
       });
     }
 
-    // Hop 4: Database Lookup on Cache Miss (or if Redis is disabled)
-    if (!isCacheHit) {
-      const replicaLabel = appState.readReplicas > 0 ? `Read Replica Pool (${appState.readReplicas} nodes)` : `Primary Database (Standalone)`;
+    // Hop 4: Database Lookup on Cache Miss OR on Redis Failure
+    if (!isCacheHit || isRedisFailure) {
+      const dbDuration = tel.actual_db_duration_ms ?? tel.db_duration_ms ?? 12;
       hops.push({
         id: 'db_miss_lookup',
-        label: replicaLabel,
+        label: isRedisFailure 
+          ? 'PostgreSQL [FALLBACK]' 
+          : (injectedFault === 'db_latency' ? `PostgreSQL (+${injectedDelay}ms Latency)` : 'Primary Database (PostgreSQL)'),
         icon: '🗄️',
-        role: 'Database Read Query',
-        request: `SELECT long_url, access_count\nFROM urls\nWHERE short_code = '${shortCode}'\nLIMIT 1;`,
-        whatIsHappening: `Database searches the 'urls' table for short_code = '${shortCode}'. ${appState.dbIndexed ? 'Uses B-Tree index for O(log N) fast point lookup (12ms).' : '⚠️ Table is UNINDEXED: executes a full table scan scanning all rows (140ms)!'}`,
-        whyExists: 'The database is the durable source of truth. All cache misses must query the database to resolve the target destination.',
-        commandOrSql: `SELECT long_url, access_count FROM urls WHERE short_code = '${shortCode}' LIMIT 1;`,
-        response: `1 row returned:\nlong_url = "${record.longUrl}"\naccess_count = ${record.accessCount}`,
-        durationMs: appState.dbIndexed ? 12 : 140
+        role: isRedisFailure ? 'Resilient Fallback Read' : 'Database Read Query (Fallback)',
+        isRealExecution: isReal,
+        isChaos: isRedisFailure || injectedFault === 'db_latency',
+        injectedFault,
+        durationMs: dbDuration,
+        request: `SELECT id, long_url, redirect_mode, access_count\nFROM urls\nWHERE short_code = '${shortCode}'\nLIMIT 1;`,
+        whatIsHappening: isRedisFailure
+          ? `REAL EXECUTION: PostgreSQL primary storage successfully resolved short_code in ${dbDuration}ms as cache fallback, preserving 100% link availability!`
+          : (injectedFault === 'db_latency'
+              ? `REAL EXECUTION: PostgreSQL query executed with +${injectedDelay}ms injected latency. Measured duration: ${dbDuration}ms.`
+              : `REAL DB LOOKUP: Executed SELECT query on PostgreSQL 'urls' table in ${dbDuration}ms. Retrieved destination URL and redirect mode.`),
+        whyExists: 'SIMULATED CONTEXT: The database is the durable source of truth. All cache misses and cache outages fall back to the DB to resolve destinations.',
+        commandOrSql: `SELECT id, long_url, redirect_mode, access_count FROM urls WHERE short_code = '${shortCode}' LIMIT 1;`,
+        response: `1 row returned in ${dbDuration}ms:\nlong_url = "${destinationUrl}"`
       });
 
-      // Hop 5: Cache Population (Write-back)
-      if (isRedisActive) {
+      // Hop 5: Cache Population (Write-back) - only when Redis is alive!
+      if (!isRedisFailure) {
         hops.push({
           id: 'redis_populate',
           label: 'Redis Write-Back (SETEX)',
           icon: '💾',
           role: 'Cache Warming on Miss',
-          request: `SETEX urls:${shortCode} 86400 "${record.longUrl}"`,
-          whatIsHappening: `API populates Redis cache with the resolved long URL and sets a 24-hour TTL (Time-To-Live). Next lookup for '${shortCode}' will be an instant CACHE HIT!`,
+          isRealExecution: isReal,
+          durationMs: tel.actual_redis_duration_ms ? Math.max(1, Math.round(tel.actual_redis_duration_ms / 2 * 10) / 10) : 1.2,
+          request: `SETEX urls:${shortCode} 86400 "${destinationUrl}"`,
+          whatIsHappening: isReal
+            ? `REAL CACHE-ASIDE: Populated Redis key 'urls:${shortCode}' with 24-hour TTL (86400s). Subsequent requests are now instant CACHE HITS.`
+            : `API populates Redis cache with the resolved long URL and sets a 24-hour TTL (Time-To-Live). Next lookup for '${shortCode}' will be an instant CACHE HIT!`,
           whyExists: 'Cache-aside pattern: on miss, populate cache so subsequent reads do not hit the database.',
-          commandOrSql: `SETEX urls:${shortCode} 86400 "${record.longUrl}"`,
-          response: `OK (Key cached for 86400s)`,
-          durationMs: 1.2
+          commandOrSql: `SETEX urls:${shortCode} 86400 "${destinationUrl}"`,
+          response: `OK (Key cached for 86400s)`
         });
-        record.inCache = true; // Mark as warm in local records
       }
     }
 
-    // Hop 6: Final Redirect Response
+    // Final Redirect Response
     hops.push({
       id: 'redirect_response',
-      label: `HTTP ${redirectType} Redirect`,
+      label: `HTTP ${effectiveRedirectMode} Redirect`,
       icon: '↪️',
       role: 'Client Redirection Response',
-      request: `HTTP/1.1 ${redirectStatus}\nLocation: ${record.longUrl}\n${cacheControlHeader}\nX-Cache: ${isCacheHit ? 'HIT' : 'MISS'}`,
-      whatIsHappening: redirectType === '301'
-        ? `Returns 301 Moved Permanently: Browser will permanently cache this destination. Subsequent visits bypass our servers entirely (reduces server load, but loses click analytics).`
-        : `Returns 302 Found: Browser performs a temporary redirect. Future clicks still hit our API server, allowing real-time analytics and click tracking.`,
+      isRealExecution: isReal,
+      isChaos,
+      injectedFault,
+      durationMs: 1,
+      request: `HTTP/1.1 ${redirectStatus}\nLocation: ${destinationUrl}\n${cacheControlHeader}\nX-Cache: ${isCacheHit ? 'HIT' : 'MISS'}\nX-Redirect-Mode: ${effectiveRedirectMode}\nX-Db-Fallback: ${dbFallback}${isChaos ? `\nX-Chaos-Fault: ${injectedFault}` : ''}`,
+      whatIsHappening: isRedisFailure
+        ? `REAL 302 REDIRECT: API returned HTTP ${effectiveRedirectMode} redirect with DB fallback guarantee (X-Db-Fallback: true, X-Chaos-Fault: redis_failure). Target: ${destinationUrl}.`
+        : (isReal
+            ? (effectiveRedirectMode === '301'
+                ? `REAL 301 REDIRECT: Permanent redirect to destination. Observability headers set (X-Cache: ${isCacheHit ? 'HIT' : 'MISS'}, X-Db-Fallback: ${dbFallback}). Access counter updated in ${tel.access_update_duration_ms || 4}ms.`
+                : `REAL 302 REDIRECT: Temporary redirect to destination. Observability headers set (X-Cache: ${isCacheHit ? 'HIT' : 'MISS'}, X-Db-Fallback: ${dbFallback}). Access counter updated in ${tel.access_update_duration_ms || 4}ms.`)
+            : (effectiveRedirectMode === '301'
+                ? `Returns 301 Moved Permanently: Browser will permanently cache this destination. Subsequent visits bypass our servers entirely.`
+                : `Returns 302 Found: Browser performs a temporary redirect. Future clicks still hit our API server for real-time analytics.`)),
       whyExists: 'Transports the browser to the long URL destination via standard HTTP redirect headers.',
-      commandOrSql: null,
-      response: `HTTP/1.1 ${redirectStatus}\nLocation: ${record.longUrl}\n${cacheControlHeader}\nServer: sho.rt-edge\nX-Cache: ${isCacheHit ? 'HIT (1.2ms)' : 'MISS (DB: ' + (appState.dbIndexed ? '12ms' : '140ms') + ')'}`,
-      durationMs: 3
+      commandOrSql: `UPDATE urls SET access_count = access_count + 1, updated_at = NOW() WHERE short_code = '${shortCode}';`,
+      response: `HTTP/1.1 ${redirectStatus}\nLocation: ${destinationUrl}\n${cacheControlHeader}\nX-Cache: ${isCacheHit ? 'HIT' : 'MISS'}\nX-Redirect-Mode: ${effectiveRedirectMode}\nAccess Count Incremented: ✅`
     });
 
-    await this.animateTrace(hops, isCacheHit ? 'read-hit' : 'read-miss');
-    this.renderDatabaseTable();
+    await this.animateTrace(hops, isRedisFailure ? 'read-miss' : (isCacheHit ? 'read-hit' : 'read-miss'));
+
+    // Refresh database table so access_count is immediately current from PostgreSQL
+    await this.loadDatabaseRecords();
+
     this.isTracing = false;
   }
 
@@ -358,6 +536,7 @@ export class RequestTracer {
       redis_optional:    ['#f59e0b', '245,158,11'],
       redis_check:       ['#f59e0b', '245,158,11'],
       redis_populate:    ['#f59e0b', '245,158,11'],
+      redis_outage:      ['#ef4444', '239,68,68'],
       response:          ['#34d399', '52,211,153'],
       redirect_response: ['#34d399', '52,211,153'],
     };
@@ -367,13 +546,26 @@ export class RequestTracer {
     hops.forEach((hop, idx) => {
       const isCompleted = idx < activeIndex;
       const isActive    = idx === activeIndex;
-      const stateClass  = isActive ? 'hop-active' : (isCompleted ? 'hop-completed' : 'hop-pending');
-      const hitMissBadge = hop.isHit
-        ? '<span class="badge-hit">● HIT</span>'
-        : (hop.isMiss ? '<span class="badge-miss">○ MISS</span>' : '');
+      let stateClass  = isActive ? 'hop-active' : (isCompleted ? 'hop-completed' : 'hop-pending');
+      if (hop.isFailed) {
+        stateClass += ' hop-failed';
+      }
+
+      const hitMissBadge = hop.isFailed
+        ? '<span class="badge-outage">✕ OUTAGE</span>'
+        : (hop.isHit
+          ? '<span class="badge-hit">● HIT</span>'
+          : (hop.isMiss ? '<span class="badge-miss">○ MISS</span>' : ''));
 
       const [hex, rgb] = hopColors[hop.id] || ['#6366f1', '99,102,241'];
       const colorStyle = `--hop-color:${hex};--hop-color-rgb:${rgb};`;
+
+      let tagClass = hop.isRealExecution ? 'tag-real' : 'tag-simulated';
+      let tagText = hop.isRealExecution ? 'REAL' : 'SIM';
+      if (hop.isChaos) {
+        tagClass = 'tag-chaos';
+        tagText = 'CHAOS';
+      }
 
       html += `
         <div class="pipeline-hop ${stateClass}" data-hop-index="${idx}" style="${colorStyle}">
@@ -382,7 +574,10 @@ export class RequestTracer {
             <div class="hop-info">
               <div class="hop-title">${hop.label} ${hitMissBadge}</div>
               <div class="hop-role">${hop.role}</div>
-              <div class="hop-latency">${hop.durationMs}ms</div>
+              <div class="hop-latency">
+                ${hop.durationMs}ms
+                <span class="hop-telemetry-tag ${tagClass}">${tagText}</span>
+              </div>
             </div>
           </div>
           ${idx < hops.length - 1 ? `
@@ -429,6 +624,7 @@ export class RequestTracer {
       redis_optional:    ['#34d399', '52,211,153'],
       redis_check:       ['#34d399', '52,211,153'],
       redis_populate:    ['#34d399', '52,211,153'],
+      redis_outage:      ['#ef4444', '239,68,68'],
       response:          ['#4ade80', '74,222,128'],
       redirect_response: ['#f472b6', '244,114,182'],
     };
@@ -456,7 +652,7 @@ export class RequestTracer {
     }
     if (hop.response) {
       codeSections.push({
-        label: 'Response Payload',
+        label: 'Response Payload / Headers',
         icon: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
         code: this.escapeHtml(hop.response),
         lang: 'language-http',
@@ -464,20 +660,27 @@ export class RequestTracer {
       });
     }
 
+    const isReal = Boolean(hop.isRealExecution);
+
     this.inspectorEl.innerHTML = `
       <div class="insp-header" style="--hop-color:${hex};--hop-color-rgb:${rgb};">
         <div class="insp-header-left">
           <div class="insp-icon-box">${this.getHopSvgIcon(hop.id)}</div>
           <div class="insp-meta">
-            <div class="insp-name-row">
+            <div class="insp-name-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <span class="insp-component-name">${this.escapeHtml(hop.label)}</span>
-              <span class="insp-node-tag">System Node</span>
+              <span class="badge-telemetry ${isReal ? 'real' : 'simulated'}">
+                ${isReal ? '● REAL EXECUTION' : '○ SIMULATED CONTEXT'}
+              </span>
+              ${hop.isChaos || hop.injectedFault ? `
+                <span class="badge-chaos-fault">⚡ FAULT: ${hop.injectedFault || 'redis_failure'}</span>
+              ` : ''}
             </div>
             <span class="insp-role-text">${this.escapeHtml(hop.role)}</span>
           </div>
         </div>
         <div class="insp-header-right">
-          <div class="insp-latency-badge" title="Estimated processing latency">
+          <div class="insp-latency-badge" title="${isReal ? 'Real measured execution duration' : 'Estimated processing latency'}">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             <span class="insp-latency-num">${Number(hop.durationMs) || 0}</span>
             <span class="insp-latency-unit">ms</span>
@@ -485,18 +688,30 @@ export class RequestTracer {
         </div>
       </div>
 
+      <div class="insp-telemetry-banner ${isReal ? '' : 'simulated-banner'}" style="${hop.isChaos ? 'border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.06);' : ''}">
+        <div class="telemetry-banner-title" style="${hop.isChaos ? 'color: #fbbf24;' : ''}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            ${isReal 
+              ? '<polyline points="20 6 9 17 4 12"/>' 
+              : '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'}
+          </svg>
+          <span>${isReal ? (hop.isChaos ? `REAL CHAOS EXECUTION TELEMETRY (${hop.injectedFault || 'ACTIVE'})` : 'REAL BACKEND OPERATION TELEMETRY') : 'SIMULATED SYSTEM DESIGN CONTEXT'}</span>
+        </div>
+        <div class="telemetry-banner-timing">Measured: <strong>${hop.durationMs}ms</strong></div>
+      </div>
+
       <div class="insp-cards-row">
         <div class="insp-card insp-card-what">
           <div class="insp-card-label">
             <svg class="insp-label-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
-            <span>What is happening</span>
+            <span>${isReal ? 'What happened (Actual Execution)' : 'What is happening'}</span>
           </div>
           <div class="insp-card-text">${this.escapeHtml(hop.whatIsHappening)}</div>
         </div>
         <div class="insp-card insp-card-why">
           <div class="insp-card-label">
-            <svg class="insp-label-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            <span>Why it exists</span>
+            <svg class="insp-label-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            <span>SIMULATED CONTEXT (Architectural Rationale)</span>
           </div>
           <div class="insp-card-text">${this.escapeHtml(hop.whyExists)}</div>
         </div>
@@ -536,6 +751,8 @@ export class RequestTracer {
       case 'redis_check':
       case 'redis_populate':
         return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`;
+      case 'redis_outage':
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/><line x1="2" y1="2" x2="22" y2="22" stroke="#ef4444" stroke-width="2.5"/></svg>`;
       case 'response':
       case 'redirect_response':
       default:
@@ -580,7 +797,11 @@ export class RequestTracer {
       html += `
         <tr>
           <td><span class="db-id">#${Number(rec.id) || 1}</span></td>
-          <td><code class="short-code-badge">${safeShortCode}</code></td>
+          <td>
+            <a href="/${safeShortCode}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;" title="Open real short URL (/${safeShortCode})">
+              <code class="short-code-badge" style="cursor:pointer;">${safeShortCode} ↗</code>
+            </a>
+          </td>
           <td class="long-url-cell" title="${safeLongUrl}">${safeLongUrl}</td>
           <td class="text-muted">${safeCreatedAt}</td>
           <td><span class="access-pill">${Number(rec.accessCount) || 0}</span></td>
@@ -590,9 +811,14 @@ export class RequestTracer {
             </span>
           </td>
           <td>
-            <button class="btn-visit-short" data-short-code="${safeShortCode}">
-              Visit (GET)
-            </button>
+            <div style="display:inline-flex;gap:6px;align-items:center;">
+              <a href="/${safeShortCode}" target="_blank" rel="noopener noreferrer" class="btn-visit-short" style="text-decoration:none;" title="Open real redirect in new tab">
+                Visit ↗
+              </a>
+              <button class="btn-visit-short btn-trace-inspect" data-short-code="${safeShortCode}" title="Simulate and inspect request trace in playground">
+                Trace
+              </button>
+            </div>
           </td>
         </tr>
       `;
@@ -620,8 +846,8 @@ export class RequestTracer {
       setTimeout(() => disclosure.classList.remove('new-record'), 2600);
     }
 
-    // Attach Visit button click handlers
-    this.tableEl.querySelectorAll('.btn-visit-short').forEach(btn => {
+    // Attach Trace inspection button click handlers
+    this.tableEl.querySelectorAll('.btn-trace-inspect').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const code = e.currentTarget.getAttribute('data-short-code');
         const redirectType = document.querySelector('input[name="redirect_mode"]:checked')?.value || '302';
