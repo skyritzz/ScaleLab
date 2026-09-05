@@ -121,20 +121,29 @@ export class RequestTracer {
   /**
    * Run Write Trace: POST /api/v1/urls
    */
-  async runWriteTrace(longUrl, strategy, redirectType, appState, realData = null, clientRttMs = 0) {
+  /**
+   * Run Write Trace: POST /api/v1/urls
+   * Sequence: Browser -> API -> Idempotency Check -> ID Generator -> Collision Check -> PostgreSQL -> Redis -> HTTP Response
+   */
+  async runWriteTrace(longUrl, strategy, redirectType, appState, realData = null, clientRttMs = 0, idempotencyKey = null) {
     if (this.isTracing) return;
     this.isTracing = true;
 
     const isReal = Boolean(realData && realData.telemetry);
     const tel = realData?.telemetry || {};
+    const isReplay = Boolean(tel.idempotency_hit);
+    const hasCollision = Boolean(tel.collision_detected);
+    const collisionAttempts = Number(tel.collision_attempts) || 1;
 
     const shortCode = realData?.short_code || this.generateShortCode(longUrl, strategy);
     const shortUrl = realData?.short_url || `/${shortCode}`;
     const createdAt = realData?.created_at
       ? new Date(realData.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       : new Date().toLocaleTimeString();
+    const httpStatus = tel.http_status || (isReplay ? 200 : 201);
+    const keyDisplay = idempotencyKey || (isReal ? 'none' : 'sim-uuid-9b42');
 
-    // Define the sequence of hops for URL Creation
+    // Define the sequence of 8 hops for URL Creation
     const hops = [
       {
         id: 'client',
@@ -143,13 +152,13 @@ export class RequestTracer {
         role: 'Originating Client',
         isRealExecution: isReal,
         durationMs: clientRttMs || 14,
-        request: `POST /api/v1/urls HTTP/1.1\nHost: ${window.location.host || 'api.sho.rt'}\nContent-Type: application/json\nUser-Agent: Mozilla/5.0\n\n{\n  "url": "${longUrl}",\n  "strategy": "${strategy}",\n  "redirect_mode": ${redirectType}\n}`,
+        request: `POST /api/v1/urls HTTP/1.1\nHost: ${window.location.host || 'api.sho.rt'}\nContent-Type: application/json\nIdempotency-Key: ${keyDisplay}\n\n{\n  "url": "${longUrl}",\n  "strategy": "${strategy}",\n  "redirect_mode": ${redirectType}\n}`,
         whatIsHappening: isReal
-          ? `REAL HTTP POST dispatched over network. Browser performance API measured round-trip time (RTT) at ${clientRttMs}ms.`
-          : 'Client serializes target URL into JSON payload and sends HTTP POST request over TLS to the API gateway.',
-        whyExists: 'Users and upstream services initiate shortening requests here. Clients require fast HTTP 201 Created responses containing the short link.',
+          ? `REAL HTTP POST dispatched over network with Idempotency-Key: '${keyDisplay}'. Browser performance API measured round-trip time (RTT) at ${clientRttMs}ms.`
+          : `Client serializes target URL into JSON payload and sends HTTP POST with Idempotency-Key: '${keyDisplay}' over TLS to the API gateway.`,
+        whyExists: 'Users and upstream services initiate shortening requests here. Supplying an idempotency key guarantees that accidental retries or network blips never produce duplicate short links.',
         commandOrSql: null,
-        response: `HTTP/1.1 201 Created\nContent-Type: application/json\n\n{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "created_at": "${realData?.created_at || new Date().toISOString()}"\n}`
+        response: `HTTP/1.1 ${httpStatus} ${isReplay ? 'OK' : 'Created'}\nContent-Type: application/json\n${isReplay ? 'Idempotent-Replay: true\n' : ''}\n{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}"\n}`
       },
       {
         id: 'api',
@@ -158,79 +167,173 @@ export class RequestTracer {
         role: 'Stateless Application Server',
         isRealExecution: isReal,
         durationMs: tel.server_duration_ms || 4,
-        request: `POST /api/v1/urls\nPayload: { "url": "${longUrl}", "strategy": "${strategy}", "redirect_mode": ${redirectType} }`,
+        request: `POST /api/v1/urls\nHeaders: [Idempotency-Key: ${keyDisplay}]\nPayload: { "url": "${longUrl}", "strategy": "${strategy}", "redirect_mode": ${redirectType} }`,
         whatIsHappening: isReal
-          ? `REAL SERVER EXECUTION: Server validated destination URL syntax and SSRF safety, generated unique short code '${shortCode}', and coordinated database persistence in ${tel.server_duration_ms}ms.`
-          : `Validates URL syntax, applies rate limiting, generates unique short code '${shortCode}' using strategy '${strategy}'.`,
-        whyExists: 'Stateless API servers handle business logic, authentication, request validation, and encoding. They can scale horizontally by adding nodes.',
-        commandOrSql: strategy === 'base62' 
-          ? `// Base62 Sequence Generation:\nID = atomic_next_id(); // PostgreSQL urls_id_seq\nshort_code = base62_encode(ID); // '${shortCode}'`
-          : `// Hash & Collision Check:\nhash = sha256("${longUrl}").take(7); // '${shortCode}'`,
-        response: `Generated Short Code: '${shortCode}' -> Dispatched ACID transaction to Primary DB`
+          ? `REAL SERVER EXECUTION: Gateway parsed JSON payload, validated URL syntax, extracted Idempotency-Key: '${keyDisplay}', and coordinated persistence in ${tel.server_duration_ms}ms.`
+          : `Validates URL syntax and SSRF safety, extracts Idempotency-Key, and routes request to the deduplication and generation pipeline.`,
+        whyExists: 'Stateless API servers handle business logic, rate limiting, request validation, and orchestrate transactions across database and cache layers.',
+        commandOrSql: null,
+        response: `Payload Validated -> Extracted Idempotency-Key '${keyDisplay}' -> Proceeding to Idempotency Verification`
+      },
+      {
+        id: 'idempotency',
+        label: isReplay ? 'Idempotency Check (KEY HIT)' : 'Idempotency Check (NEW KEY)',
+        icon: '🛡️',
+        role: 'Durable Request Deduplication',
+        isRealExecution: isReal,
+        durationMs: isReplay ? (tel.db_duration_ms || 2.4) : 1.2,
+        isHit: isReplay,
+        isMiss: !isReplay,
+        commandOrSql: `-- PostgreSQL Concurrency-Safe Advisory Lock & Lookup:\nSELECT pg_advisory_xact_lock(hashtext('${keyDisplay}'));\nSELECT idempotency_key, request_hash, response_code, response_body\nFROM idempotency_keys\nWHERE idempotency_key = '${keyDisplay}';`,
+        whatIsHappening: isReal
+          ? (isReplay
+              ? `REAL IDEMPOTENCY HIT: Key '${keyDisplay}' was found in database with matching SHA-256 payload hash. Returned cached response with 'Idempotent-Replay: true'. Zero duplicate URL records created.`
+              : `REAL IDEMPOTENCY CHECK: Key '${keyDisplay}' is new. Transaction advisory lock acquired in PostgreSQL to guarantee concurrent duplicate requests cannot create multiple URLs.`)
+          : 'Checks durable idempotency store before touching core data tables. Ensures at-most-once creation semantics.',
+        whyExists: 'Guarantees at-most-once semantics. Distributed clients frequently retry requests upon network timeouts or transient errors; the idempotency guard ensures safe, replayable responses.',
+        response: isReplay
+          ? `MATCH FOUND -> Returning original cached HTTP ${httpStatus} response with 'Idempotent-Replay: true'`
+          : `NEW KEY -> Verified no prior submission. Proceeding to ID generator`
+      },
+      {
+        id: 'id_gen',
+        label: `ID Generator (${strategy.toUpperCase()})`,
+        icon: '🎲',
+        role: 'Candidate Slug Synthesis',
+        isRealExecution: isReal,
+        durationMs: isReplay ? 0 : 0.3,
+        commandOrSql: isReplay
+          ? '// Skipped: Request was resolved by idempotency cache'
+          : (strategy === 'hash'
+              ? `// SHA-256 Hash Generation (Attempt ${collisionAttempts}):\nseed = "${longUrl}"${collisionAttempts > 1 ? ` + ":salt:${collisionAttempts}"` : ''};\nhash = crypto.createHash('sha256').update(seed).digest('base64url');\ncandidate = hash.replace(/[^0-9a-zA-Z]/g, '').substring(0, 7); // '${shortCode}'`
+              : (strategy === 'snowflake'
+                  ? `// Snowflake Strategy:\nsnowflakeId = (timestamp << 22n) | (workerId << 12n) | sequence;\ncandidate = encodeBase62(snowflakeId).substring(0, 7); // '${shortCode}'`
+                  : `// Base62 Strategy:\nnextId = SELECT nextval('urls_id_seq'); // atomic sequence\ncandidate = encodeBase62(14776336n + nextId); // '${shortCode}'`)),
+        whatIsHappening: isReal
+          ? (isReplay
+              ? 'BYPASSED: Request was resolved directly by idempotency replay without generating a new ID.'
+              : `REAL GENERATOR: Generated candidate slug '${shortCode}' using ${strategy.toUpperCase()} strategy (attempt ${collisionAttempts}).`)
+          : `Generates a compact alphanumeric short code using the selected '${strategy}' algorithm.`,
+        whyExists: 'Different ID generation strategies balance coordination overhead, length, determinism, and vulnerability to enumeration attacks.',
+        response: isReplay ? 'BYPASSED (Replay)' : `Candidate Code: '${shortCode}'`
+      },
+      {
+        id: 'collision_check',
+        label: hasCollision
+          ? `Collision Check (${collisionAttempts} ATTEMPTS)`
+          : (isReplay ? 'Collision Check (BYPASSED)' : 'Collision Check (UNIQUE)'),
+        icon: '🔍',
+        role: 'Collision Detection & Recovery',
+        isRealExecution: isReal,
+        durationMs: isReplay ? 0 : (hasCollision ? Math.round(collisionAttempts * 1.8 * 10) / 10 : 0.4),
+        isHit: hasCollision,
+        commandOrSql: isReplay
+          ? '// Skipped: Request was resolved by idempotency cache'
+          : (hasCollision
+              ? `-- Attempt 1: INSERT failed with 23505 (unique_violation) on idx_urls_short_code\n-- PostgreSQL SAVEPOINT rollback executed cleanly\n-- Attempt ${collisionAttempts}: Regenerated candidate with salt '${longUrl}:salt:${collisionAttempts}'\n-- Succeeded with short_code: '${shortCode}'`
+              : `-- PostgreSQL UNIQUE(short_code) check:\nAttempt 1: Candidate '${shortCode}' passed UNIQUE constraint check`),
+        whatIsHappening: isReal
+          ? (isReplay
+              ? 'BYPASSED: Replay response required no collision checking.'
+              : (hasCollision
+                  ? `REAL HASH COLLISION DETECTED & RESOLVED: Initial candidate collided with an existing row (PostgreSQL 23505). Service caught error with SAVEPOINT, salted the hash, and successfully resolved on attempt ${collisionAttempts}.`
+                  : `REAL UNIQUENESS CONFIRMATION: Candidate '${shortCode}' passed UNIQUE constraint on attempt 1 without collisions.`))
+          : 'Verifies candidate short code against existing records in PostgreSQL. On collision, applies salt and retries up to 5 attempts.',
+        whyExists: 'Hash truncation introduces non-zero collision risk (Birthday Problem). Systems must detect database UNIQUE constraint violations and gracefully recover without overwriting data.',
+        response: isReplay
+          ? 'BYPASSED (Replay)'
+          : (hasCollision
+              ? `COLLISION DETECTED -> Successfully resolved on attempt ${collisionAttempts} with '${shortCode}'`
+              : `UNIQUE: Candidate '${shortCode}' confirmed`)
       },
       {
         id: 'db',
-        label: 'Primary Database (PostgreSQL)',
+        label: isReplay ? 'PostgreSQL (LOOKUP ONLY)' : 'Primary Database (PostgreSQL)',
         icon: '🗄️',
         role: 'Relational Database (Write Master)',
         isRealExecution: isReal,
         durationMs: tel.db_duration_ms || 14,
-        request: `INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;`,
+        request: isReplay
+          ? `SELECT idempotency_key, request_hash, response_code, response_body FROM idempotency_keys WHERE idempotency_key = '${keyDisplay}';`
+          : `INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;`,
         whatIsHappening: isReal
-          ? `REAL DB TRANSACTION: Executed parameterized INSERT query in PostgreSQL in ${tel.db_duration_ms}ms. Committed to Write-Ahead Log (WAL) with UNIQUE constraint guarantee.`
-          : `Primary database acquires write lock, inserts mapping record into 'urls' table, updates B-Tree index, and flushes to WAL.`,
+          ? (isReplay
+              ? `REAL DB EXECUTION: Queried idempotency record from PostgreSQL in ${tel.db_duration_ms}ms. INSERT was safely skipped.`
+              : `REAL DB TRANSACTION: Executed atomic transaction in PostgreSQL in ${tel.db_duration_ms}ms. Persisted URL record to 'urls' and idempotency record to 'idempotency_keys' with UNIQUE constraint protection.`)
+          : 'Primary database acquires write lock, inserts mapping record into urls table, updates B-Tree index, and flushes to WAL.',
         whyExists: 'Relational databases guarantee ACID durability and uniqueness constraints (UNIQUE index on short_code) so short URLs are never overwritten.',
-        commandOrSql: `INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;`,
-        response: `Query OK, 1 row affected (Duration: ${tel.db_duration_ms || 14}ms)\nCommitted short_code: '${shortCode}'`
+        commandOrSql: isReplay
+          ? `SELECT idempotency_key, request_hash, response_code, response_body\nFROM idempotency_keys WHERE idempotency_key = '${keyDisplay}';`
+          : `BEGIN;\nINSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)\nVALUES ('${shortCode}', '${longUrl}', ${redirectType}, 0, NOW(), NOW())\nRETURNING id, short_code, created_at;\n\nINSERT INTO idempotency_keys (idempotency_key, request_hash, response_code, response_body)\nVALUES ('${keyDisplay}', 'sha256_hash', 201, ...);\nCOMMIT;`,
+        response: isReplay
+          ? `Query OK: Retrieved cached idempotency record in ${tel.db_duration_ms}ms`
+          : `Query OK: 1 row affected (Duration: ${tel.db_duration_ms}ms)\nCommitted short_code: '${shortCode}'`
       },
       {
         id: 'redis_optional',
-        label: 'Redis Cache (Pre-warm)',
+        label: isReplay ? 'Redis Cache (BYPASSED)' : 'Redis Cache (Pre-warm)',
         icon: '⚡',
         role: 'In-Memory Key-Value Store',
         isRealExecution: isReal,
-        durationMs: tel.redis_duration_ms || 1.2,
-        request: `SETEX urls:${shortCode} 86400 "{\\"id\\":${realData?.id || 1},\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
+        durationMs: isReplay ? 0 : (tel.redis_duration_ms || 1.2),
+        request: isReplay
+          ? `// Cache pre-warming already completed on original creation`
+          : `SETEX urls:${shortCode} 86400 "{\\"id\\":${realData?.id || 1},\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
         whatIsHappening: isReal
-          ? `REAL CACHE PRE-WARM: API pre-warmed Redis key 'urls:${shortCode}' with a 24-hour TTL in ${tel.redis_duration_ms}ms. Next visitor gets an instant CACHE HIT without querying the database.`
-          : `API pre-warms Redis with the new short code mapping with a 24h TTL to ensure future reads are instant cache hits.`,
+          ? (isReplay
+              ? 'BYPASSED: Cache pre-warming already occurred when the URL was originally created.'
+              : (tel.redis_cached !== false
+                  ? `REAL CACHE PRE-WARM: API pre-warmed Redis key 'urls:${shortCode}' with a 24-hour TTL in ${tel.redis_duration_ms}ms. Next visitor gets an instant CACHE HIT without querying the database.`
+                  : 'Bypassed or degraded.'))
+          : 'API pre-warms Redis with the new short code mapping with a 24h TTL to ensure future reads are instant cache hits.',
         whyExists: 'Pre-warming newly created links prevents immediate cache misses if the URL is shared and visited immediately.',
-        commandOrSql: `SETEX urls:${shortCode} 86400 "{\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
-        response: tel.redis_cached !== false ? `OK (Cached in ${tel.redis_duration_ms || 1.2}ms)` : `Bypassed/Degraded`
+        commandOrSql: isReplay
+          ? `// Redis cache already warm`
+          : `SETEX urls:${shortCode} 86400 "{\\"longUrl\\":\\"${longUrl}\\",\\"redirectMode\\":${redirectType}}"`,
+        response: isReplay
+          ? 'BYPASSED (Replay)'
+          : (tel.redis_cached !== false ? `OK (Cached in ${tel.redis_duration_ms || 1.2}ms)` : `Bypassed/Degraded`)
       },
       {
         id: 'response',
-        label: 'HTTP 201 Response',
+        label: isReplay ? 'HTTP 200 Replay' : 'HTTP 201 Created',
         icon: '✅',
         role: 'Client Response Delivery',
         isRealExecution: isReal,
         durationMs: 1,
-        request: `HTTP/1.1 201 Created\nLocation: ${shortUrl}\nServer-Timing: server;dur=${tel.server_duration_ms || 15}, db;dur=${tel.db_duration_ms || 12}, redis;dur=${tel.redis_duration_ms || 1}`,
+        request: `HTTP/1.1 ${httpStatus} ${isReplay ? 'OK' : 'Created'}\nLocation: ${shortUrl}\nServer-Timing: server;dur=${tel.server_duration_ms || 15}, db;dur=${tel.db_duration_ms || 12}, redis;dur=${tel.redis_duration_ms || 1}\n${isReplay ? 'Idempotent-Replay: true\n' : ''}`,
         whatIsHappening: isReal
-          ? `REAL RESPONSE: API delivered HTTP 201 Created with short URL '${shortUrl}' and full server-timing telemetry headers.`
-          : 'API returns HTTP 201 Created with JSON metadata and the ready-to-use short URL.',
-        whyExists: 'Informs client that the resource was durably persisted.',
+          ? (isReplay
+              ? `REAL REPLAY RESPONSE: API delivered cached HTTP ${httpStatus} response with header 'Idempotent-Replay: true'. Zero database mutations.`
+              : `REAL RESPONSE: API delivered HTTP 201 Created with short URL '${shortUrl}' and full server-timing telemetry headers.`)
+          : 'API returns response with JSON metadata and the ready-to-use short URL.',
+        whyExists: 'Informs client that the resource was durably persisted, or returned safely via idempotent replay.',
         commandOrSql: null,
         response: `{\n  "status": "success",\n  "short_code": "${shortCode}",\n  "short_url": "${shortUrl}",\n  "long_url": "${longUrl}"\n}`
       }
     ];
 
-    // Store record in local database
-    const newRecord = {
-      id: realData?.id || (this.databaseRecords.length > 0 ? Math.max(...this.databaseRecords.map(r => r.id || 0)) + 1 : 1),
-      shortCode,
-      longUrl,
-      createdAt,
-      accessCount: 0,
-      inCache: true
-    };
-    this.databaseRecords.unshift(newRecord);
+    // Store record in local database if not already present
+    if (!this.databaseRecords.some(r => r.shortCode === shortCode)) {
+      const newRecord = {
+        id: realData?.id || (this.databaseRecords.length > 0 ? Math.max(...this.databaseRecords.map(r => r.id || 0)) + 1 : 1),
+        shortCode,
+        longUrl,
+        createdAt,
+        accessCount: 0,
+        inCache: true
+      };
+      this.databaseRecords.unshift(newRecord);
+    }
 
     await this.animateTrace(hops, 'write');
     this.renderDatabaseTable();
-    if (this.onRecordCreated) this.onRecordCreated(newRecord);
+    if (this.onRecordCreated) {
+      const record = this.databaseRecords.find(r => r.shortCode === shortCode);
+      if (record) this.onRecordCreated(record);
+    }
     this.isTracing = false;
-    return newRecord;
+    return this.databaseRecords.find(r => r.shortCode === shortCode);
   }
 
   /**
@@ -531,6 +634,9 @@ export class RequestTracer {
       client_get:        ['#38bdf8', '56,189,248'],
       api:               ['#a78bfa', '167,139,250'],
       api_lookup:        ['#a78bfa', '167,139,250'],
+      idempotency:       ['#38bdf8', '56,189,248'],
+      id_gen:            ['#c084fc', '192,132,252'],
+      collision_check:   ['#f472b6', '244,114,182'],
       db:                ['#fb923c', '251,146,60'],
       db_miss_lookup:    ['#fb923c', '251,146,60'],
       redis_optional:    ['#f59e0b', '245,158,11'],
@@ -551,11 +657,18 @@ export class RequestTracer {
         stateClass += ' hop-failed';
       }
 
-      const hitMissBadge = hop.isFailed
-        ? '<span class="badge-outage">✕ OUTAGE</span>'
-        : (hop.isHit
-          ? '<span class="badge-hit">● HIT</span>'
-          : (hop.isMiss ? '<span class="badge-miss">○ MISS</span>' : ''));
+      let hitMissBadge = '';
+      if (hop.isFailed) {
+        hitMissBadge = '<span class="badge-outage">✕ OUTAGE</span>';
+      } else if (hop.id === 'idempotency' && hop.isHit) {
+        hitMissBadge = '<span class="badge-replay">↺ REPLAY</span>';
+      } else if (hop.id === 'collision_check' && hop.isHit) {
+        hitMissBadge = '<span class="badge-collision">⚠ COLLISION</span>';
+      } else if (hop.isHit) {
+        hitMissBadge = '<span class="badge-hit">● HIT</span>';
+      } else if (hop.isMiss) {
+        hitMissBadge = '<span class="badge-miss">○ MISS</span>';
+      }
 
       const [hex, rgb] = hopColors[hop.id] || ['#6366f1', '99,102,241'];
       const colorStyle = `--hop-color:${hex};--hop-color-rgb:${rgb};`;
@@ -619,6 +732,9 @@ export class RequestTracer {
       client_get:        ['#60a5fa', '96,165,250'],
       api:               ['#a78bfa', '167,139,250'],
       api_lookup:        ['#a78bfa', '167,139,250'],
+      idempotency:       ['#38bdf8', '56,189,248'],
+      id_gen:            ['#c084fc', '192,132,252'],
+      collision_check:   ['#f472b6', '244,114,182'],
       db:                ['#fb923c', '251,146,60'],
       db_miss_lookup:    ['#fb923c', '251,146,60'],
       redis_optional:    ['#34d399', '52,211,153'],
@@ -744,6 +860,12 @@ export class RequestTracer {
       case 'api':
       case 'api_lookup':
         return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="13" rx="2"/><line x1="6" x2="6.01" y1="7" y2="7"/><line x1="6" x2="6.01" y1="17" y2="17"/><line x1="18" x2="18.01" y1="7" y2="7"/><line x1="18" x2="18.01" y1="17" y2="17"/></svg>`;
+      case 'idempotency':
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`;
+      case 'id_gen':
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`;
+      case 'collision_check':
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
       case 'db':
       case 'db_miss_lookup':
         return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>`;

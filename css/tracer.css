@@ -7,12 +7,15 @@
    Each component gets its own color identity
    ===================================================== */
 :root {
-  --hop-client:    #60a5fa;  /* blue */
-  --hop-api:       #a78bfa;  /* violet */
-  --hop-db:        #fb923c;  /* orange */
-  --hop-redis:     #34d399;  /* emerald */
-  --hop-response:  #4ade80;  /* green */
-  --hop-redirect:  #f472b6;  /* pink */
+  --hop-client:      #60a5fa;  /* blue */
+  --hop-api:         #a78bfa;  /* violet */
+  --hop-idempotency: #38bdf8;  /* sky cyan */
+  --hop-id-gen:      #c084fc;  /* purple */
+  --hop-collision:   #f472b6;  /* pink/rose */
+  --hop-db:          #fb923c;  /* orange */
+  --hop-redis:       #34d399;  /* emerald */
+  --hop-response:    #4ade80;  /* green */
+  --hop-redirect:    #f472b6;  /* pink */
 }
 
 /* =====================================================
@@ -323,6 +326,40 @@
   margin-left: 0.25rem;
   vertical-align: middle;
   box-shadow: 0 0 6px rgba(251,146,60,0.2);
+}
+
+.badge-collision {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: rgba(244, 114, 182, 0.16);
+  border: 1px solid rgba(244, 114, 182, 0.45);
+  color: #f472b6;
+  font-size: 0.54rem;
+  font-weight: 800;
+  padding: 0.1rem 0.32rem;
+  border-radius: 4px;
+  letter-spacing: 0.06em;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+  box-shadow: 0 0 6px rgba(244, 114, 182, 0.25);
+}
+
+.badge-replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
+  font-size: 0.54rem;
+  font-weight: 800;
+  padding: 0.1rem 0.32rem;
+  border-radius: 4px;
+  letter-spacing: 0.06em;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25);
 }
 
 /* =====================================================

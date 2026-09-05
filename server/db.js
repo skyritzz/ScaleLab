@@ -50,6 +50,17 @@ export async function runMigrations() {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_short_code ON urls(short_code);
       CREATE INDEX IF NOT EXISTS idx_urls_created_at ON urls(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        id BIGSERIAL PRIMARY KEY,
+        idempotency_key VARCHAR(128) UNIQUE NOT NULL,
+        request_hash VARCHAR(64) NOT NULL,
+        response_code INTEGER NOT NULL,
+        response_body JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_keys_key ON idempotency_keys(idempotency_key);
     `);
     console.log('[DB] Migrations applied successfully.');
   } finally {

@@ -40,6 +40,9 @@ class ApplicationController {
     this.eventHistory = [];
     this.lastUtilizationBracket = 0;
     this.lastBottleneckName = 'None';
+
+    // Idempotency tracking for logical submissions
+    this.lastLogicalSubmission = null;
   }
 
   init() {
@@ -440,13 +443,39 @@ class ApplicationController {
             `;
           }
 
+          // Determine idempotency key: generate UUID for new logical submission, reuse on retry of same request
+          const isSameLogicalRequest = Boolean(
+            this.lastLogicalSubmission &&
+            this.lastLogicalSubmission.url === longUrl &&
+            this.lastLogicalSubmission.strategy === strategy &&
+            this.lastLogicalSubmission.redirectMode === redirectMode
+          );
+
+          let idempotencyKey;
+          if (isSameLogicalRequest && this.lastLogicalSubmission.key) {
+            idempotencyKey = this.lastLogicalSubmission.key;
+          } else {
+            idempotencyKey = (typeof crypto !== 'undefined' && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+            this.lastLogicalSubmission = {
+              url: longUrl,
+              strategy,
+              redirectMode,
+              key: idempotencyKey
+            };
+          }
+
           let realData = null;
           let clientRttMs = 0;
           const clientReqStart = performance.now();
           try {
             const response = await fetch('/api/v1/urls', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                'Idempotency-Key': idempotencyKey
+              },
               body: JSON.stringify({
                 url: longUrl,
                 strategy,
@@ -486,8 +515,8 @@ class ApplicationController {
             dbDisclosure.open = true;
           }
 
-          // Animate tracer with real backend data & client RTT
-          await this.tracer.runWriteTrace(longUrl, strategy, String(redirectMode), this.state, realData, clientRttMs);
+          // Animate tracer with real backend data, client RTT, and idempotency key
+          await this.tracer.runWriteTrace(longUrl, strategy, String(redirectMode), this.state, realData, clientRttMs, idempotencyKey);
 
           setTimeout(() => {
             const traceSection = document.querySelector('.trace-section');

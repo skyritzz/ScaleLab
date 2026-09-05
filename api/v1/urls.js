@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   // CORS support
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Chaos-Fault, X-Chaos-Delay-Ms, X-Chaos-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Idempotency-Key, X-Test-Force-Collision, X-Chaos-Fault, X-Chaos-Delay-Ms, X-Chaos-Key');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -35,11 +35,16 @@ export default async function handler(req, res) {
     const { url, strategy = 'base62', redirect_mode = 302 } = body;
 
     const chaos = parseChaosConfig(req);
+    const idempotencyKey = req.headers['idempotency-key'] || null;
+    const forceCollision = req.headers['x-test-force-collision'] === 'true';
+
     const result = await createShortUrl({
       url,
       strategy,
       redirectMode: Number(redirect_mode) || 302,
       baseUrl,
+      idempotencyKey,
+      forceCollision,
       chaos
     });
 
@@ -47,10 +52,14 @@ export default async function handler(req, res) {
     res.setHeader('X-Chaos-Fault', chaos.enabled ? chaos.fault : 'none');
     res.setHeader('X-Chaos-Injected-Delay-Ms', String(chaos.enabled ? chaos.delayMs : 0));
 
+    if (result.isReplay) {
+      res.setHeader('Idempotent-Replay', 'true');
+    }
+
     if (result.telemetry) {
       const { server_duration_ms, db_duration_ms, redis_duration_ms } = result.telemetry;
       res.setHeader('Server-Timing', `server;dur=${server_duration_ms}, db;dur=${db_duration_ms}, redis;dur=${redis_duration_ms}`);
-      res.setHeader('Access-Control-Expose-Headers', 'Server-Timing, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms');
+      res.setHeader('Access-Control-Expose-Headers', 'Server-Timing, Idempotent-Replay, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms');
     }
 
     return res.status(result.status).json(result.data);

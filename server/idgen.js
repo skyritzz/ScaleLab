@@ -34,14 +34,16 @@ export async function generateBase62Code(client) {
 }
 
 /**
- * Generate short code using SHA-256 hash
+ * Generate short code using SHA-256 hash.
+ * Attempt 1 is deterministic from the longUrl.
+ * Subsequent attempts use a salt to resolve collisions.
  */
-export function generateHashCode(longUrl) {
-  const seed = `${longUrl}:${Date.now()}:${crypto.randomBytes(4).toString('hex')}`;
+export function generateHashCode(longUrl, attempt = 1) {
+  const seed = attempt === 1 ? String(longUrl) : `${longUrl}:salt:${attempt}`;
   const hash = crypto.createHash('sha256').update(seed).digest('base64url');
   // Strip any hyphens or underscores to keep clean alphanumeric string
   const clean = hash.replace(/[^0-9a-zA-Z]/g, '');
-  return clean.substring(0, 7);
+  return (clean.padEnd(7, '0')).substring(0, 7);
 }
 
 /**
@@ -58,10 +60,10 @@ export function generateSnowflakeCode() {
 /**
  * Primary ID generation dispatcher
  */
-export async function generateShortCode(client, strategy = 'base62', longUrl = '') {
+export async function generateShortCode(client, strategy = 'base62', longUrl = '', attempt = 1) {
   switch (strategy) {
     case 'hash':
-      return { shortCode: generateHashCode(longUrl), strategy: 'hash' };
+      return { shortCode: generateHashCode(longUrl, attempt), strategy: 'hash' };
     case 'snowflake':
       return { shortCode: generateSnowflakeCode(), strategy: 'snowflake' };
     case 'base62':

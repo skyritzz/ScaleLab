@@ -23,11 +23,16 @@ export async function urlRoutes(fastify, options) {
     const baseUrl = configuredBase || fallbackBase;
 
     const chaos = parseChaosConfig(request);
+    const idempotencyKey = request.headers['idempotency-key'] || null;
+    const forceCollision = request.headers['x-test-force-collision'] === 'true';
+
     const result = await createShortUrl({
       url,
       strategy,
       redirectMode: redirect_mode,
       baseUrl,
+      idempotencyKey,
+      forceCollision,
       chaos
     });
 
@@ -35,10 +40,14 @@ export async function urlRoutes(fastify, options) {
     reply.header('X-Chaos-Fault', chaos.enabled ? chaos.fault : 'none');
     reply.header('X-Chaos-Injected-Delay-Ms', String(chaos.enabled ? chaos.delayMs : 0));
 
+    if (result.isReplay) {
+      reply.header('Idempotent-Replay', 'true');
+    }
+
     if (result.telemetry) {
       const { server_duration_ms, db_duration_ms, redis_duration_ms } = result.telemetry;
       reply.header('Server-Timing', `server;dur=${server_duration_ms}, db;dur=${db_duration_ms}, redis;dur=${redis_duration_ms}`);
-      reply.header('Access-Control-Expose-Headers', 'Server-Timing, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms');
+      reply.header('Access-Control-Expose-Headers', 'Server-Timing, Idempotent-Replay, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms');
     }
 
     return reply.status(result.status).send(result.data);

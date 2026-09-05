@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { pool } from '../db.js';
 import { getShortUrl, setShortUrl } from '../redis.js';
 import { generateShortCode } from '../idgen.js';
@@ -47,7 +48,27 @@ export async function recordAccess(urlId) {
 /**
  * Core business logic: Create short URL with persistence and cache pre-warming
  */
-export async function createShortUrl({ url, strategy = 'base62', redirectMode = 302, baseUrl, chaos = null }) {
+function computeRequestHash(payload) {
+  const normalized = JSON.stringify({
+    url: String(payload.url || '').trim(),
+    strategy: String(payload.strategy || 'base62'),
+    redirect_mode: Number(payload.redirectMode || 302)
+  });
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+/**
+ * Core business logic: Create short URL with idempotency, collision recovery, and cache pre-warming
+ */
+export async function createShortUrl({
+  url,
+  strategy = 'base62',
+  redirectMode = 302,
+  baseUrl,
+  idempotencyKey = null,
+  forceCollision = false,
+  chaos = null
+}) {
   const serverStart = performance.now();
   const chaosConfig = chaos || { enabled: false, fault: null, delayMs: 0 };
 
@@ -66,6 +87,11 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
       injected_delay_ms: chaosConfig.enabled ? (chaosConfig.delayMs || 0) : 0,
       redis_hit: false,
       db_fallback: false,
+      idempotency_checked: Boolean(idempotencyKey),
+      idempotency_hit: false,
+      collision_detected: false,
+      collision_attempts: 1,
+      short_code: null,
       server_duration_ms: serverDurationMs,
       actual_server_duration_ms: serverDurationMs,
       db_duration_ms: 0,
@@ -78,37 +104,138 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
     return {
       status: 400,
       data: { status: 'error', message: validation.error, telemetry },
-      telemetry
+      telemetry,
+      isReplay: false
     };
   }
 
   const destinationUrl = validation.sanitizedUrl;
+  const requestHash = computeRequestHash({ url: destinationUrl, strategy, redirectMode });
   const client = await pool.connect();
+
   let createdRow = null;
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = 5;
+  let collisionDetected = false;
   let dbDurationMs = 0;
+  const isDevOrTest = process.env.NODE_ENV !== 'production' && !process.env.VERCEL;
+  const shouldForceCollision = Boolean(forceCollision && isDevOrTest);
 
   try {
+    await client.query('BEGIN');
+
+    // 2. Concurrency-safe idempotency check
+    if (idempotencyKey) {
+      // Advisory transaction lock guarantees serialize access for identical idempotency keys
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
+
+      const checkRes = await client.query(
+        'SELECT idempotency_key, request_hash, response_code, response_body FROM idempotency_keys WHERE idempotency_key = $1',
+        [idempotencyKey]
+      );
+
+      if (checkRes.rows.length > 0) {
+        const existing = checkRes.rows[0];
+        await client.query('COMMIT');
+
+        const serverDurationMs = Math.round((performance.now() - serverStart) * 10) / 10;
+
+        if (existing.request_hash !== requestHash) {
+          // Same key with different payload -> 409 Conflict
+          const telemetry = {
+            idempotency_checked: true,
+            idempotency_hit: false,
+            collision_detected: false,
+            collision_attempts: 1,
+            short_code: null,
+            server_duration_ms: serverDurationMs,
+            actual_server_duration_ms: serverDurationMs,
+            db_duration_ms: 0,
+            actual_db_duration_ms: 0,
+            redis_duration_ms: 0,
+            actual_redis_duration_ms: 0,
+            http_status: 409,
+            actual_http_status: 409
+          };
+          return {
+            status: 409,
+            data: {
+              status: 'error',
+              message: 'Idempotency key conflict: same key was previously used with a different request payload.',
+              telemetry
+            },
+            telemetry,
+            isReplay: false
+          };
+        }
+
+        // Same key with same payload -> Return cached idempotent response
+        const cachedData = existing.response_body;
+        const replayTelemetry = {
+          ...(cachedData.telemetry || {}),
+          idempotency_checked: true,
+          idempotency_hit: true,
+          server_duration_ms: serverDurationMs,
+          actual_server_duration_ms: serverDurationMs,
+          http_status: existing.response_code,
+          actual_http_status: existing.response_code
+        };
+        const replayData = {
+          ...cachedData,
+          telemetry: replayTelemetry
+        };
+
+        return {
+          status: existing.response_code,
+          data: replayData,
+          telemetry: replayTelemetry,
+          isReplay: true
+        };
+      }
+    }
+
+    // 3. Generation and Collision Recovery Loop (up to 5 attempts)
     const dbStart = performance.now();
+
     while (attempts < maxAttempts) {
       attempts++;
-      const { shortCode } = await generateShortCode(client, strategy, destinationUrl);
+      let { shortCode } = await generateShortCode(client, strategy, destinationUrl, attempts);
+
+      // Dev-only forced collision hook: force candidate to collide on attempt 1
+      if (shouldForceCollision && attempts === 1) {
+        const existing = await client.query('SELECT short_code FROM urls LIMIT 1');
+        if (existing.rows.length > 0) {
+          shortCode = existing.rows[0].short_code;
+        } else {
+          await client.query(
+            "INSERT INTO urls (short_code, long_url, redirect_mode) VALUES ('seed_col', 'https://example.com/seed', 302) ON CONFLICT DO NOTHING"
+          );
+          shortCode = 'seed_col';
+        }
+      }
 
       try {
+        await client.query('SAVEPOINT sp_insert_url');
         const insertQuery = `
           INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)
           VALUES ($1, $2, $3, 0, NOW(), NOW())
           RETURNING id, short_code, long_url, redirect_mode, access_count, created_at;
         `;
         const result = await client.query(insertQuery, [shortCode, destinationUrl, redirectMode]);
+        await client.query('RELEASE SAVEPOINT sp_insert_url');
         createdRow = result.rows[0];
-        break;
+        break; // Successfully inserted
       } catch (dbErr) {
-        if (dbErr.code === '23505') {
-          console.warn(`[Service] Collision for code '${shortCode}', retrying (attempt ${attempts}/${maxAttempts})...`);
+        await client.query('ROLLBACK TO SAVEPOINT sp_insert_url');
+        // Detect unique violation (23505) specifically for short_code
+        const isShortCodeCollision = dbErr.code === '23505' &&
+          (dbErr.constraint?.includes('short_code') || dbErr.detail?.includes('short_code') || !dbErr.constraint);
+
+        if (isShortCodeCollision) {
+          collisionDetected = true;
+          console.warn(`[Service] Collision detected for short_code '${shortCode}', retrying with salt (attempt ${attempts}/${maxAttempts})...`);
           if (attempts >= maxAttempts) {
-            throw new Error('Failed to generate a unique short code after multiple attempts. Please try again.');
+            throw new Error(`Failed to generate a unique short code after ${maxAttempts} attempts.`);
           }
         } else {
           throw dbErr;
@@ -122,6 +249,55 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
     }
 
     dbDurationMs = Math.round((performance.now() - dbStart) * 10) / 10;
+
+    const formattedBase = (baseUrl || process.env.BASE_URL || '').replace(/\/+$/, '');
+    const shortUrl = `${formattedBase}/${createdRow.short_code}`;
+
+    const initialTelemetry = {
+      chaos_enabled: Boolean(chaosConfig.enabled),
+      injected_fault: chaosConfig.fault || null,
+      injected_delay_ms: chaosConfig.enabled ? (chaosConfig.delayMs || 0) : 0,
+      redis_hit: false,
+      db_fallback: false,
+      idempotency_checked: Boolean(idempotencyKey),
+      idempotency_hit: false,
+      collision_detected: collisionDetected,
+      collision_attempts: attempts,
+      short_code: createdRow.short_code,
+      server_duration_ms: 0,
+      actual_server_duration_ms: 0,
+      db_duration_ms: dbDurationMs,
+      actual_db_duration_ms: dbDurationMs,
+      redis_duration_ms: 0,
+      actual_redis_duration_ms: 0,
+      http_status: 201,
+      actual_http_status: 201
+    };
+
+    const responseBody = {
+      status: 'success',
+      short_code: createdRow.short_code,
+      short_url: shortUrl,
+      long_url: createdRow.long_url,
+      redirect_mode: createdRow.redirect_mode,
+      created_at: createdRow.created_at.toISOString(),
+      telemetry: initialTelemetry
+    };
+
+    // Persist idempotency record within transaction
+    if (idempotencyKey) {
+      await client.query(`
+        INSERT INTO idempotency_keys (idempotency_key, request_hash, response_code, response_body)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (idempotency_key) DO UPDATE
+        SET response_code = EXCLUDED.response_code, response_body = EXCLUDED.response_body;
+      `, [idempotencyKey, requestHash, 201, JSON.stringify(responseBody)]);
+    }
+
+    await client.query('COMMIT');
+  } catch (txErr) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw txErr;
   } finally {
     client.release();
   }
@@ -134,6 +310,11 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
       injected_delay_ms: chaosConfig.enabled ? (chaosConfig.delayMs || 0) : 0,
       redis_hit: false,
       db_fallback: false,
+      idempotency_checked: Boolean(idempotencyKey),
+      idempotency_hit: false,
+      collision_detected: collisionDetected,
+      collision_attempts: attempts,
+      short_code: null,
       server_duration_ms: serverDurationMs,
       actual_server_duration_ms: serverDurationMs,
       db_duration_ms: dbDurationMs,
@@ -145,8 +326,9 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
     };
     return {
       status: 500,
-      data: { status: 'error', message: 'Failed to create short URL in database', telemetry },
-      telemetry
+      data: { status: 'error', message: 'Failed to create short URL in database after retry limit', telemetry },
+      telemetry,
+      isReplay: false
     };
   }
 
@@ -181,12 +363,17 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
 
   const serverDurationMs = Math.round((performance.now() - serverStart) * 10) / 10;
 
-  const telemetry = {
+  const finalTelemetry = {
     chaos_enabled: Boolean(chaosConfig.enabled),
     injected_fault: chaosConfig.fault || null,
     injected_delay_ms: chaosConfig.enabled ? (chaosConfig.delayMs || 0) : 0,
     redis_hit: false,
     db_fallback: false,
+    idempotency_checked: Boolean(idempotencyKey),
+    idempotency_hit: false,
+    collision_detected: collisionDetected,
+    collision_attempts: attempts,
+    short_code: createdRow.short_code,
     server_duration_ms: serverDurationMs,
     actual_server_duration_ms: serverDurationMs,
     db_duration_ms: dbDurationMs,
@@ -195,22 +382,34 @@ export async function createShortUrl({ url, strategy = 'base62', redirectMode = 
     actual_redis_duration_ms: redisDurationMs,
     http_status: 201,
     actual_http_status: 201,
-    short_code: createdRow.short_code,
     redis_cached: Boolean(redisWarmResult.success)
   };
 
+  const finalResponseBody = {
+    status: 'success',
+    short_code: createdRow.short_code,
+    short_url: shortUrl,
+    long_url: createdRow.long_url,
+    redirect_mode: createdRow.redirect_mode,
+    created_at: createdRow.created_at.toISOString(),
+    telemetry: finalTelemetry
+  };
+
+  // Update persisted idempotency record with final complete telemetry
+  if (idempotencyKey) {
+    pool.query(
+      'UPDATE idempotency_keys SET response_body = $1 WHERE idempotency_key = $2',
+      [JSON.stringify(finalResponseBody), idempotencyKey]
+    ).catch(err => {
+      console.warn('[Service] Failed to update idempotency telemetry:', err.message);
+    });
+  }
+
   return {
     status: 201,
-    data: {
-      status: 'success',
-      short_code: createdRow.short_code,
-      short_url: shortUrl,
-      long_url: createdRow.long_url,
-      redirect_mode: createdRow.redirect_mode,
-      created_at: createdRow.created_at.toISOString(),
-      telemetry
-    },
-    telemetry
+    data: finalResponseBody,
+    telemetry: finalTelemetry,
+    isReplay: false
   };
 }
 
