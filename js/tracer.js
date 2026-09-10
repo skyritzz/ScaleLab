@@ -24,6 +24,8 @@ export class RequestTracer {
         longUrl: 'https://github.com/torvalds/linux',
         createdAt: new Date(Date.now() - 3600000).toLocaleTimeString(),
         accessCount: 42,
+        isDemo: true,
+        isOwner: false,
         inCache: true
       },
       {
@@ -32,6 +34,8 @@ export class RequestTracer {
         longUrl: 'https://blog.bytebytego.com/p/ep1-url-shortener',
         createdAt: new Date(Date.now() - 1800000).toLocaleTimeString(),
         accessCount: 15,
+        isDemo: true,
+        isOwner: false,
         inCache: true
       },
       {
@@ -40,6 +44,8 @@ export class RequestTracer {
         longUrl: 'https://news.ycombinator.com',
         createdAt: new Date(Date.now() - 600000).toLocaleTimeString(),
         accessCount: 8,
+        isDemo: true,
+        isOwner: false,
         inCache: false
       }
     ];
@@ -54,7 +60,7 @@ export class RequestTracer {
    */
   async loadDatabaseRecords() {
     try {
-      const res = await fetch('/api/v1/urls');
+      const res = await fetch('/api/v1/urls', { credentials: 'same-origin' });
       if (!res.ok) return;
       const json = await res.json();
       if (json && Array.isArray(json.data) && json.data.length > 0) {
@@ -64,6 +70,8 @@ export class RequestTracer {
           longUrl: r.long_url,
           createdAt: new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           accessCount: r.access_count || 0,
+          isDemo: Boolean(r.is_demo),
+          isOwner: Boolean(r.is_owner),
           inCache: true
         }));
         this.renderDatabaseTable();
@@ -321,6 +329,8 @@ export class RequestTracer {
         longUrl,
         createdAt,
         accessCount: 0,
+        isDemo: false,
+        isOwner: true,
         inCache: true
       };
       this.databaseRecords.unshift(newRecord);
@@ -352,6 +362,8 @@ export class RequestTracer {
         longUrl: 'https://example.com/demo-destination',
         createdAt: new Date().toLocaleTimeString(),
         accessCount: 0,
+        isDemo: true,
+        isOwner: false,
         inCache: false
       };
       this.databaseRecords.push(record);
@@ -386,6 +398,7 @@ export class RequestTracer {
     try {
       const response = await fetch(`/${shortCode}`, {
         method: 'GET',
+        credentials: 'same-origin',
         headers: reqHeaders
       });
       clientRttMs = Math.round((performance.now() - clientReqStart) * 10) / 10;
@@ -920,9 +933,14 @@ export class RequestTracer {
         <tr>
           <td><span class="db-id">#${Number(rec.id) || 1}</span></td>
           <td>
-            <a href="/${safeShortCode}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;" title="Open real short URL (/${safeShortCode})">
-              <code class="short-code-badge" style="cursor:pointer;">${safeShortCode} ↗</code>
-            </a>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <a href="/${safeShortCode}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;" title="Open real short URL (/${safeShortCode})">
+                <code class="short-code-badge" style="cursor:pointer;">${safeShortCode} ↗</code>
+              </a>
+              ${rec.isDemo
+                ? '<span class="scope-badge badge-demo" title="System sample record for distributed architecture simulation">Sample</span>'
+                : '<span class="scope-badge badge-owner" title="Private to your current browser session">Your Link</span>'}
+            </div>
           </td>
           <td class="long-url-cell" title="${safeLongUrl}">${safeLongUrl}</td>
           <td class="text-muted">${safeCreatedAt}</td>

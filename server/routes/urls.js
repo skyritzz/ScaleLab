@@ -1,5 +1,6 @@
 import { createShortUrl, getRecentUrls } from '../services/urlService.js';
 import { parseChaosConfig } from '../services/chaosService.js';
+import { resolveSession } from '../session.js';
 
 export async function urlRoutes(fastify, options) {
   // POST /api/v1/urls - Shorten URL
@@ -16,6 +17,7 @@ export async function urlRoutes(fastify, options) {
       }
     }
   }, async (request, reply) => {
+    const { sessionId } = resolveSession(request, reply);
     const { url, strategy = 'base62', redirect_mode = 302 } = request.body;
 
     const configuredBase = process.env.BASE_URL ? process.env.BASE_URL.replace(/\/+$/, '') : '';
@@ -33,7 +35,8 @@ export async function urlRoutes(fastify, options) {
       baseUrl,
       idempotencyKey,
       forceCollision,
-      chaos
+      chaos,
+      ownerId: sessionId
     });
 
     reply.header('X-Chaos-Enabled', chaos.enabled ? 'true' : 'false');
@@ -53,13 +56,14 @@ export async function urlRoutes(fastify, options) {
     return reply.status(result.status).send(result.data);
   });
 
-  // GET /api/v1/urls - Retrieve latest 50 records
+  // GET /api/v1/urls - Retrieve session-scoped latest records + demo records
   fastify.get('/api/v1/urls', async (request, reply) => {
+    const { sessionId } = resolveSession(request, reply);
     const configuredBase = process.env.BASE_URL ? process.env.BASE_URL.replace(/\/+$/, '') : '';
     const fallbackBase = `${request.protocol}://${request.headers.host || `${process.env.HOST || 'localhost'}:${process.env.PORT || 4000}`}`;
     const baseUrl = configuredBase || fallbackBase;
 
-    const result = await getRecentUrls({ baseUrl, limit: 50 });
+    const result = await getRecentUrls({ baseUrl, ownerId: sessionId, limit: 50 });
     return reply.status(result.status).send(result.data);
   });
 }

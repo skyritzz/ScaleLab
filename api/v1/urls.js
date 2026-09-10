@@ -1,6 +1,7 @@
 import { createShortUrl, getRecentUrls } from '../../server/services/urlService.js';
 import { parseChaosConfig } from '../../server/services/chaosService.js';
 import { runMigrations } from '../../server/db.js';
+import { resolveSession } from '../../server/session.js';
 
 let isMigrated = false;
 async function ensureMigrations() {
@@ -15,8 +16,22 @@ async function ensureMigrations() {
 }
 
 export default async function handler(req, res) {
-  // CORS support
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // Strict CORS: allowlist only, never wildcard with credentials
+  const allowedOrigins = new Set([
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:4000',
+    'http://127.0.0.1:4000',
+    ...(process.env.BASE_URL ? [process.env.BASE_URL.replace(/\/+$/, '')] : []),
+    ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : [])
+  ]);
+
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Idempotency-Key, X-Test-Force-Collision, X-Chaos-Fault, X-Chaos-Delay-Ms, X-Chaos-Key');
 
@@ -25,6 +40,8 @@ export default async function handler(req, res) {
   }
 
   await ensureMigrations();
+
+  const { sessionId } = resolveSession(req, res);
 
   const protocol = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
@@ -45,7 +62,8 @@ export default async function handler(req, res) {
       baseUrl,
       idempotencyKey,
       forceCollision,
-      chaos
+      chaos,
+      ownerId: sessionId
     });
 
     res.setHeader('X-Chaos-Enabled', chaos.enabled ? 'true' : 'false');
@@ -66,7 +84,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    const result = await getRecentUrls({ baseUrl, limit: 50 });
+    const result = await getRecentUrls({ baseUrl, ownerId: sessionId, limit: 50 });
     return res.status(result.status).json(result.data);
   }
 

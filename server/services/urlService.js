@@ -67,7 +67,8 @@ export async function createShortUrl({
   baseUrl,
   idempotencyKey = null,
   forceCollision = false,
-  chaos = null
+  chaos = null,
+  ownerId = null
 }) {
   const serverStart = performance.now();
   const chaosConfig = chaos || { enabled: false, fault: null, delayMs: 0 };
@@ -124,14 +125,15 @@ export async function createShortUrl({
   try {
     await client.query('BEGIN');
 
-    // 2. Concurrency-safe idempotency check
+    // 2. Concurrency-safe, owner-scoped idempotency check
     if (idempotencyKey) {
-      // Advisory transaction lock guarantees serialize access for identical idempotency keys
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [idempotencyKey]);
+      // Advisory transaction lock guarantees serialized access for identical idempotency keys within an owner
+      const lockSeed = ownerId ? `${ownerId}:${idempotencyKey}` : idempotencyKey;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockSeed]);
 
       const checkRes = await client.query(
-        'SELECT idempotency_key, request_hash, response_code, response_body FROM idempotency_keys WHERE idempotency_key = $1',
-        [idempotencyKey]
+        'SELECT idempotency_key, request_hash, response_code, response_body FROM idempotency_keys WHERE idempotency_key = $1 AND (owner_id = $2 OR (owner_id IS NULL AND $2 IS NULL))',
+        [idempotencyKey, ownerId]
       );
 
       if (checkRes.rows.length > 0) {
@@ -217,11 +219,11 @@ export async function createShortUrl({
       try {
         await client.query('SAVEPOINT sp_insert_url');
         const insertQuery = `
-          INSERT INTO urls (short_code, long_url, redirect_mode, access_count, created_at, updated_at)
-          VALUES ($1, $2, $3, 0, NOW(), NOW())
-          RETURNING id, short_code, long_url, redirect_mode, access_count, created_at;
+          INSERT INTO urls (short_code, long_url, redirect_mode, access_count, owner_id, is_demo, created_at, updated_at)
+          VALUES ($1, $2, $3, 0, $4, false, NOW(), NOW())
+          RETURNING id, short_code, long_url, redirect_mode, access_count, owner_id, is_demo, created_at;
         `;
-        const result = await client.query(insertQuery, [shortCode, destinationUrl, redirectMode]);
+        const result = await client.query(insertQuery, [shortCode, destinationUrl, redirectMode, ownerId]);
         await client.query('RELEASE SAVEPOINT sp_insert_url');
         createdRow = result.rows[0];
         break; // Successfully inserted
@@ -284,14 +286,14 @@ export async function createShortUrl({
       telemetry: initialTelemetry
     };
 
-    // Persist idempotency record within transaction
+    // Persist owner-scoped idempotency record within transaction
     if (idempotencyKey) {
       await client.query(`
-        INSERT INTO idempotency_keys (idempotency_key, request_hash, response_code, response_body)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (idempotency_key) DO UPDATE
+        INSERT INTO idempotency_keys (idempotency_key, owner_id, request_hash, response_code, response_body)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (owner_id, idempotency_key) DO UPDATE
         SET response_code = EXCLUDED.response_code, response_body = EXCLUDED.response_body;
-      `, [idempotencyKey, requestHash, 201, JSON.stringify(responseBody)]);
+      `, [idempotencyKey, ownerId, requestHash, 201, JSON.stringify(responseBody)]);
     }
 
     await client.query('COMMIT');
@@ -348,7 +350,9 @@ export async function createShortUrl({
     redisWarmResult = await setShortUrl(createdRow.short_code, {
       id: Number(createdRow.id),
       longUrl: createdRow.long_url,
-      redirectMode: createdRow.redirect_mode
+      redirectMode: createdRow.redirect_mode,
+      ownerId: createdRow.owner_id || null,
+      isDemo: Boolean(createdRow.is_demo)
     }, 86400);
 
     if (chaosConfig.enabled && chaosConfig.fault === 'redis_latency') {
@@ -398,8 +402,8 @@ export async function createShortUrl({
   // Update persisted idempotency record with final complete telemetry
   if (idempotencyKey) {
     pool.query(
-      'UPDATE idempotency_keys SET response_body = $1 WHERE idempotency_key = $2',
-      [JSON.stringify(finalResponseBody), idempotencyKey]
+      'UPDATE idempotency_keys SET response_body = $1 WHERE idempotency_key = $2 AND (owner_id = $3 OR (owner_id IS NULL AND $3 IS NULL))',
+      [JSON.stringify(finalResponseBody), idempotencyKey, ownerId]
     ).catch(err => {
       console.warn('[Service] Failed to update idempotency telemetry:', err.message);
     });
@@ -416,14 +420,15 @@ export async function createShortUrl({
 /**
  * Core business logic: Retrieve latest stored records
  */
-export async function getRecentUrls({ baseUrl, limit = 50 }) {
+export async function getRecentUrls({ baseUrl, ownerId = null, limit = 50 }) {
   const queryText = `
-    SELECT id, short_code, long_url, redirect_mode, access_count, created_at, updated_at
+    SELECT id, short_code, long_url, redirect_mode, access_count, created_at, updated_at, is_demo, owner_id
     FROM urls
-    ORDER BY created_at DESC
-    LIMIT $1;
+    WHERE (owner_id = $1 AND owner_id IS NOT NULL) OR is_demo = true
+    ORDER BY is_demo ASC, created_at DESC
+    LIMIT $2;
   `;
-  const result = await pool.query(queryText, [limit]);
+  const result = await pool.query(queryText, [ownerId, limit]);
 
   const formattedBase = (baseUrl || process.env.BASE_URL || '').replace(/\/+$/, '');
 
@@ -434,6 +439,8 @@ export async function getRecentUrls({ baseUrl, limit = 50 }) {
     long_url: row.long_url,
     redirect_mode: row.redirect_mode,
     access_count: Number(row.access_count),
+    is_demo: Boolean(row.is_demo),
+    is_owner: Boolean(ownerId && row.owner_id === ownerId),
     created_at: row.created_at.toISOString()
   }));
 
@@ -450,7 +457,7 @@ export async function getRecentUrls({ baseUrl, limit = 50 }) {
 /**
  * Core business logic: Resolve short URL redirect with real telemetry
  */
-export async function resolveRedirect(shortCode, chaos = null) {
+export async function resolveRedirect(shortCode, chaos = null, requesterOwnerId = null) {
   const serverStart = performance.now();
   const chaosConfig = chaos || { enabled: false, fault: null, delayMs: 0 };
   const lower = (shortCode || '').trim().toLowerCase();
@@ -512,12 +519,18 @@ export async function resolveRedirect(shortCode, chaos = null) {
     }
 
     const serverDurationMs = Math.round((performance.now() - serverStart) * 10) / 10;
+    const isDemo = Boolean(cached.isDemo);
+    const isOwner = Boolean(requesterOwnerId && cached.ownerId && cached.ownerId === requesterOwnerId);
+    const isAuthorizedForTelemetry = isDemo || isOwner;
 
     return {
       targetUrl: cached.longUrl,
       redirectMode,
       isHit: true,
       dbFallback: false,
+      isDemo,
+      isOwner,
+      isAuthorizedForTelemetry,
       telemetry: {
         chaos_enabled: Boolean(chaosConfig.enabled),
         injected_fault: chaosConfig.fault || null,
@@ -542,7 +555,7 @@ export async function resolveRedirect(shortCode, chaos = null) {
   // 3. Query PostgreSQL on cache MISS (or when Redis simulated failure triggered fallback)
   const dbStart = performance.now();
   const queryText = `
-    SELECT id, long_url, redirect_mode, access_count
+    SELECT id, long_url, redirect_mode, access_count, owner_id, is_demo
     FROM urls
     WHERE short_code = $1
     LIMIT 1;
@@ -590,7 +603,9 @@ export async function resolveRedirect(shortCode, chaos = null) {
     await setShortUrl(shortCode, {
       id: Number(row.id),
       longUrl: targetUrl,
-      redirectMode
+      redirectMode,
+      ownerId: row.owner_id || null,
+      isDemo: Boolean(row.is_demo)
     }, 86400);
     redisSetMs = Math.round((performance.now() - redisSetStart) * 10) / 10;
   }
@@ -603,12 +618,18 @@ export async function resolveRedirect(shortCode, chaos = null) {
   }
 
   const serverDurationMs = Math.round((performance.now() - serverStart) * 10) / 10;
+  const isDemo = Boolean(row.is_demo);
+  const isOwner = Boolean(requesterOwnerId && row.owner_id && row.owner_id === requesterOwnerId);
+  const isAuthorizedForTelemetry = isDemo || isOwner;
 
   return {
     targetUrl,
     redirectMode,
     isHit: false,
     dbFallback: true,
+    isDemo,
+    isOwner,
+    isAuthorizedForTelemetry,
     telemetry: {
       chaos_enabled: Boolean(chaosConfig.enabled),
       injected_fault: chaosConfig.fault || null,

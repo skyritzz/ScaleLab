@@ -2,6 +2,23 @@ import crypto from 'node:crypto';
 
 const BASE_URL = 'http://localhost:4000';
 
+let sessionCookie = '';
+async function clientFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (sessionCookie) {
+    headers['Cookie'] = sessionCookie;
+  }
+  const res = await fetch(url, { ...options, headers });
+  const setCookie = res.headers.get('set-cookie');
+  if (setCookie) {
+    const match = setCookie.match(/sho_rt_session=[^;]+/);
+    if (match) {
+      sessionCookie = match[0];
+    }
+  }
+  return res;
+}
+
 async function runTests() {
   console.log('--- STARTING sho.rt IDEMPOTENCY & COLLISION VERIFICATION ---');
 
@@ -13,7 +30,7 @@ async function runTests() {
     strategy: 'base62',
     redirect_mode: 302
   };
-  const resA = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resA = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -33,7 +50,7 @@ async function runTests() {
 
   // Test B: Same key + same payload -> same response + replay header + no duplicate URL
   console.log('\n[Test B] Same key + same payload -> same response + replay header');
-  const resB = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resB = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -53,7 +70,7 @@ async function runTests() {
 
   // Test C: Same key + different payload -> 409 + no new URL
   console.log('\n[Test C] Same key + different payload -> 409');
-  const resC = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resC = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -81,17 +98,17 @@ async function runTests() {
     redirect_mode: 302
   };
   const [resD1, resD2, resD3] = await Promise.all([
-    fetch(`${BASE_URL}/api/v1/urls`, {
+    clientFetch(`${BASE_URL}/api/v1/urls`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyD },
       body: JSON.stringify(payloadD)
     }),
-    fetch(`${BASE_URL}/api/v1/urls`, {
+    clientFetch(`${BASE_URL}/api/v1/urls`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyD },
       body: JSON.stringify(payloadD)
     }),
-    fetch(`${BASE_URL}/api/v1/urls`, {
+    clientFetch(`${BASE_URL}/api/v1/urls`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyD },
       body: JSON.stringify(payloadD)
@@ -113,7 +130,7 @@ async function runTests() {
   // Test E: Hash without collision -> attempt 1
   console.log('\n[Test E] Hash strategy without collision -> attempt 1');
   const keyE = crypto.randomUUID();
-  const resE = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resE = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyE },
     body: JSON.stringify({
@@ -133,7 +150,7 @@ async function runTests() {
   // Test F: Forced development collision -> collision detected + retry succeeds
   console.log('\n[Test F] Forced development collision -> collision detected + retry succeeds');
   const keyF = crypto.randomUUID();
-  const resF = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resF = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -156,7 +173,7 @@ async function runTests() {
 
   // Test G: Base62 strategy still works
   console.log('\n[Test G] Base62 strategy still works');
-  const resG = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resG = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({
@@ -172,7 +189,7 @@ async function runTests() {
 
   // Test H: Snowflake strategy still works
   console.log('\n[Test H] Snowflake strategy still works');
-  const resH = await fetch(`${BASE_URL}/api/v1/urls`, {
+  const resH = await clientFetch(`${BASE_URL}/api/v1/urls`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
     body: JSON.stringify({
@@ -189,14 +206,14 @@ async function runTests() {
   // Test I: Existing Redis/redirect behavior still works
   console.log('\n[Test I] Existing Redis/redirect behavior still works');
   // First GET with Accept: application/json for observability trace
-  const resIJson = await fetch(`${BASE_URL}/${dataG.short_code}`, {
+  const resIJson = await clientFetch(`${BASE_URL}/${dataG.short_code}`, {
     headers: { 'Accept': 'application/json' }
   });
   const dataIJson = await resIJson.json();
   console.log('JSON Mode Status:', resIJson.status, 'Cache Hit:', dataIJson.telemetry?.cache_hit);
 
   // Second GET without Accept for real redirect
-  const resIRedirect = await fetch(`${BASE_URL}/${dataG.short_code}`, {
+  const resIRedirect = await clientFetch(`${BASE_URL}/${dataG.short_code}`, {
     redirect: 'manual'
   });
   console.log('Redirect Status:', resIRedirect.status, 'Location:', resIRedirect.headers.get('location'));

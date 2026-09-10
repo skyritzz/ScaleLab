@@ -472,6 +472,7 @@ class ApplicationController {
           try {
             const response = await fetch('/api/v1/urls', {
               method: 'POST',
+              credentials: 'same-origin',
               headers: {
                 'Content-Type': 'application/json',
                 'Idempotency-Key': idempotencyKey

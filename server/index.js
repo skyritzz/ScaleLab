@@ -28,9 +28,26 @@ export async function buildServer() {
     }
   });
 
-  // Enable CORS
+  // Enable CORS with strict allowlist and credentials support
+  const allowedOrigins = new Set([
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:4000',
+    'http://127.0.0.1:4000',
+    ...(process.env.BASE_URL ? [process.env.BASE_URL.replace(/\/+$/, '')] : [])
+  ]);
+
   await fastify.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      if (!origin) {
+        return cb(null, true);
+      }
+      if (allowedOrigins.has(origin)) {
+        return cb(null, true);
+      }
+      return cb(null, false);
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
   });
 

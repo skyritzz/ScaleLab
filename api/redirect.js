@@ -1,5 +1,6 @@
 import { resolveRedirect } from '../server/services/urlService.js';
 import { parseChaosConfig } from '../server/services/chaosService.js';
+import { resolveSession } from '../server/session.js';
 
 export default async function handler(req, res) {
   const shortCode = req.query.code || req.query.shortCode;
@@ -11,11 +12,12 @@ export default async function handler(req, res) {
     });
   }
 
+  const { sessionId } = resolveSession(req, res);
   const acceptHeader = req.headers['accept'] || '';
-  const wantsJson = acceptHeader.includes('application/json') || req.query.format === 'json';
+  const wantsJson = (acceptHeader.includes('application/json') || req.query.format === 'json') && !acceptHeader.includes('text/html');
 
   const chaos = parseChaosConfig(req);
-  const result = await resolveRedirect(shortCode, chaos);
+  const result = await resolveRedirect(shortCode, chaos, sessionId);
 
   // Chaos response headers
   res.setHeader('X-Chaos-Enabled', chaos.enabled ? 'true' : 'false');
@@ -30,7 +32,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const { targetUrl, redirectMode, isHit, dbFallback, telemetry } = result;
+  const { targetUrl, redirectMode, isHit, dbFallback, telemetry, isAuthorizedForTelemetry } = result;
 
   // Useful observability headers
   const serverTiming = [
@@ -46,8 +48,8 @@ export default async function handler(req, res) {
   res.setHeader('Server-Timing', serverTiming);
   res.setHeader('Access-Control-Expose-Headers', 'X-Cache, X-Redirect-Mode, X-Db-Fallback, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms, Server-Timing, Location');
 
-  // If client requested JSON (telemetry inspection mode)
-  if (wantsJson) {
+  // JSON inspection mode: strictly restricted to demo links or the creator's own links
+  if (wantsJson && isAuthorizedForTelemetry) {
     return res.status(200).json({
       status: 'success',
       short_code: shortCode,

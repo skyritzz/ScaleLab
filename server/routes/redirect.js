@@ -1,14 +1,16 @@
 import { resolveRedirect } from '../services/urlService.js';
 import { parseChaosConfig } from '../services/chaosService.js';
+import { resolveSession } from '../session.js';
 
 export async function redirectRoutes(fastify, options) {
   fastify.get('/:shortCode', async (request, reply) => {
     const { shortCode } = request.params;
+    const { sessionId } = resolveSession(request, reply);
     const acceptHeader = request.headers['accept'] || '';
-    const wantsJson = acceptHeader.includes('application/json') || request.query?.format === 'json';
+    const wantsJson = (acceptHeader.includes('application/json') || request.query?.format === 'json') && !acceptHeader.includes('text/html');
 
     const chaos = parseChaosConfig(request);
-    const result = await resolveRedirect(shortCode, chaos);
+    const result = await resolveRedirect(shortCode, chaos, sessionId);
 
     // Chaos response headers
     reply.header('X-Chaos-Enabled', chaos.enabled ? 'true' : 'false');
@@ -26,7 +28,7 @@ export async function redirectRoutes(fastify, options) {
       });
     }
 
-    const { targetUrl, redirectMode, isHit, dbFallback, telemetry } = result;
+    const { targetUrl, redirectMode, isHit, dbFallback, telemetry, isAuthorizedForTelemetry } = result;
 
     // Standard useful observability headers
     const serverTiming = [
@@ -42,8 +44,8 @@ export async function redirectRoutes(fastify, options) {
     reply.header('Server-Timing', serverTiming);
     reply.header('Access-Control-Expose-Headers', 'X-Cache, X-Redirect-Mode, X-Db-Fallback, X-Chaos-Enabled, X-Chaos-Fault, X-Chaos-Injected-Delay-Ms, Server-Timing, Location');
 
-    // If client requested JSON (Request Tracer telemetry inspection mode)
-    if (wantsJson) {
+    // JSON inspection mode: strictly restricted to demo links or the creator's own links
+    if (wantsJson && isAuthorizedForTelemetry) {
       return reply.status(200).send({
         status: 'success',
         short_code: shortCode,

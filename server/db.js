@@ -53,14 +53,38 @@ export async function runMigrations() {
 
       CREATE TABLE IF NOT EXISTS idempotency_keys (
         id BIGSERIAL PRIMARY KEY,
-        idempotency_key VARCHAR(128) UNIQUE NOT NULL,
+        idempotency_key VARCHAR(128) NOT NULL,
+        owner_id VARCHAR(64),
         request_hash VARCHAR(64) NOT NULL,
         response_code INTEGER NOT NULL,
         response_body JSONB NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_keys_key ON idempotency_keys(idempotency_key);
+      -- Extend urls table for anonymous ownership and demo distinction
+      ALTER TABLE urls ADD COLUMN IF NOT EXISTS owner_id VARCHAR(64);
+      ALTER TABLE urls ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_short_code ON urls(short_code);
+      CREATE INDEX IF NOT EXISTS idx_urls_created_at ON urls(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_urls_owner_id ON urls(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_urls_is_demo ON urls(is_demo);
+
+      -- Extend idempotency_keys table for owner-scoped idempotency isolation
+      ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS owner_id VARCHAR(64);
+      ALTER TABLE idempotency_keys DROP CONSTRAINT IF EXISTS idempotency_keys_idempotency_key_key;
+      DROP INDEX IF EXISTS idx_idempotency_keys_key;
+      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_owner ON idempotency_keys(owner_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_keys_owner_key ON idempotency_keys(owner_id, idempotency_key);
+
+      -- Seed standard demo/system records (unassigned to any user, marked as is_demo = true)
+      INSERT INTO urls (short_code, long_url, redirect_mode, access_count, is_demo, created_at, updated_at)
+      VALUES
+        ('aB92x', 'https://github.com/torvalds/linux', 302, 42, true, NOW() - INTERVAL '1 hour', NOW()),
+        ('k9L0z', 'https://blog.bytebytego.com/p/ep1-url-shortener', 302, 15, true, NOW() - INTERVAL '30 minutes', NOW()),
+        ('m4X7w', 'https://news.ycombinator.com', 302, 8, true, NOW() - INTERVAL '10 minutes', NOW())
+      ON CONFLICT (short_code) DO UPDATE
+      SET is_demo = true;
     `);
     console.log('[DB] Migrations applied successfully.');
   } finally {
