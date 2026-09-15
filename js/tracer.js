@@ -53,6 +53,88 @@ export class RequestTracer {
     this.activeTrace = null;
     this.selectedHop = null;
     this.isTracing = false;
+
+    this.setupScrollControls();
+  }
+
+  /**
+   * Set up navigation buttons and wheel/drag listeners for the pipeline
+   */
+  setupScrollControls() {
+    const leftBtn = document.getElementById('pipeline-scroll-left');
+    const rightBtn = document.getElementById('pipeline-scroll-right');
+
+    const getScrollContainer = () => {
+      if (!this.containerEl) return null;
+      return this.containerEl.querySelector('.pipeline-flow') || this.containerEl.querySelector('.flow-preview-grid');
+    };
+
+    if (leftBtn) {
+      leftBtn.addEventListener('click', () => {
+        const el = getScrollContainer();
+        if (el) el.scrollBy({ left: -260, behavior: 'smooth' });
+      });
+    }
+
+    if (rightBtn) {
+      rightBtn.addEventListener('click', () => {
+        const el = getScrollContainer();
+        if (el) el.scrollBy({ left: 260, behavior: 'smooth' });
+      });
+    }
+
+    const previewGrid = this.containerEl?.querySelector('.flow-preview-grid');
+    if (previewGrid) {
+      this.bindDragAndWheel(previewGrid);
+    }
+  }
+
+  /**
+   * Bind mouse drag-to-scroll and horizontal mousewheel to a scrollable container
+   */
+  bindDragAndWheel(el) {
+    if (!el || el._dragWheelBound) return () => false;
+    el._dragWheelBound = true;
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    let hasDragged = false;
+
+    el.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      isDown = true;
+      hasDragged = false;
+      el.classList.add('is-dragging');
+      startX = e.pageX - el.offsetLeft;
+      scrollLeft = el.scrollLeft;
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDown) {
+        isDown = false;
+        el.classList.remove('is-dragging');
+      }
+    });
+
+    el.addEventListener('mousemove', (e) => {
+      if (!isDown) return;
+      const x = e.pageX - el.offsetLeft;
+      const walk = x - startX;
+      if (Math.abs(walk) > 4) {
+        hasDragged = true;
+        e.preventDefault();
+        el.scrollLeft = scrollLeft - walk;
+      }
+    });
+
+    el.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth) {
+        el.scrollLeft += e.deltaY;
+      }
+    }, { passive: true });
+
+    return () => hasDragged;
   }
 
   /**
@@ -62,7 +144,11 @@ export class RequestTracer {
     try {
       const res = await fetch('/api/v1/urls', { credentials: 'same-origin' });
       if (!res.ok) return;
-      const json = await res.json();
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return;
+      const rawText = await res.text();
+      if (!rawText.trim()) return;
+      const json = JSON.parse(rawText);
       if (json && Array.isArray(json.data) && json.data.length > 0) {
         this.databaseRecords = json.data.map(r => ({
           id: r.id,
@@ -81,6 +167,7 @@ export class RequestTracer {
       console.warn('[Tracer] Using fallback simulator records (backend unreachable):', err.message);
     }
   }
+
 
   /**
    * Base62 encoding utility
@@ -716,21 +803,40 @@ export class RequestTracer {
       `;
     });
 
+    const existingFlow = this.containerEl.querySelector('.pipeline-flow');
+    const prevScroll = (existingFlow && activeIndex > 0) ? existingFlow.scrollLeft : 0;
+
     html += `</div>`;
     this.containerEl.innerHTML = html;
 
-    // Attach click handlers to each hop for interactive manual inspection
-    const hopEls = this.containerEl.querySelectorAll('.pipeline-hop');
-    hopEls.forEach(el => {
-      el.addEventListener('click', () => {
-        const idx = parseInt(el.getAttribute('data-hop-index'), 10);
-        if (hops[idx]) {
-          this.openHopInspector(hops[idx]);
-          hopEls.forEach(h => h.classList.remove('hop-selected'));
-          el.classList.add('hop-selected');
+    const flowEl = this.containerEl.querySelector('.pipeline-flow');
+    if (flowEl) {
+      const getHasDragged = this.bindDragAndWheel(flowEl);
+
+      if (activeIndex === 0) {
+        flowEl.scrollLeft = 0;
+      } else {
+        flowEl.scrollLeft = prevScroll;
+        const activeHopEl = flowEl.querySelector(`.pipeline-hop[data-hop-index="${activeIndex}"]`);
+        if (activeHopEl && typeof activeHopEl.scrollIntoView === 'function') {
+          activeHopEl.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
         }
+      }
+
+      // Attach click handlers to each hop for interactive manual inspection
+      const hopEls = flowEl.querySelectorAll('.pipeline-hop');
+      hopEls.forEach(el => {
+        el.addEventListener('click', () => {
+          if (getHasDragged && getHasDragged()) return;
+          const idx = parseInt(el.getAttribute('data-hop-index'), 10);
+          if (hops[idx]) {
+            this.openHopInspector(hops[idx]);
+            hopEls.forEach(h => h.classList.remove('hop-selected'));
+            el.classList.add('hop-selected');
+          }
+        });
       });
-    });
+    }
   }
 
   /**

@@ -6,7 +6,7 @@
    SCALE SIMULATOR: 2-COLUMN REFERENCE LAYOUT
    ===================================================== */
 
-/* Centered page container — bounds the banner + architecture + controls so
+/* Centered page container that bounds the banner + architecture + controls so
    nothing can spill past the viewport horizontally. Full width on mobile,
    bounded max-width on desktop. */
 .scale-page-wrap {

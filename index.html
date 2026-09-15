@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>sho.rt: URL Shortener System Design Playground</title>
+  <title>Scale Lab: System Design Simulators</title>
   <meta name="description" content="Create real short URLs. Watch requests flow through API, Redis, and Database. Scale to millions. Break things. Fix them.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="css/tracer.css">
   <link rel="stylesheet" href="css/metrics.css">
   <link rel="stylesheet" href="css/challenges.css">
+  <link rel="stylesheet" href="css/rate-limiter.css">
 </head>
 <body>
 
@@ -32,9 +33,9 @@
           </svg>
         </div>
         <div class="brand-text-wrap">
-          <span class="brand-name">sho.rt</span>
+          <span class="brand-name">Scale Lab</span>
           <span class="brand-slash">/</span>
-          <span class="brand-title">System Simulator</span>
+          <span class="brand-title" id="brand-sim-title">URL Shortener</span>
         </div>
       </div>
 
@@ -53,6 +54,26 @@
           <span>Challenges</span>
         </button>
         <button class="nav-tab-btn" data-mode="chaos-lab" id="tab-chaos-lab">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Chaos Lab</span>
+        </button>
+      </nav>
+
+      <!-- Center: Rate Limiter Navigation Tabs (shown only for the Rate Limiter simulator) -->
+      <nav class="header-tabs rl-header-tabs" aria-label="Rate Limiter Views" style="display: none;">
+        <button class="nav-tab-btn rl-mode-btn active" data-rl-mode="how-it-works">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/><path d="m15 15 3 3-3 3"/></svg>
+          <span>How it works</span>
+        </button>
+        <button class="nav-tab-btn rl-mode-btn" data-rl-mode="scale-simulator">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+          <span>Scale System</span>
+        </button>
+        <button class="nav-tab-btn rl-mode-btn" data-rl-mode="challenges">
+          <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          <span>Challenges</span>
+        </button>
+        <button class="nav-tab-btn rl-mode-btn" data-rl-mode="chaos-lab">
           <svg class="tab-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <span>Chaos Lab</span>
         </button>
@@ -87,6 +108,25 @@
        MAIN
   ============================================================ -->
   <main class="main-content">
+
+    <!-- ============================================================
+         SIMULATOR SWITCHER
+    ============================================================ -->
+    <div class="sim-switcher-bar" id="sim-switcher-bar">
+      <button class="sim-switch-btn active" data-sim="url-shortener" id="sim-btn-url-shortener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <span>URL Shortener</span>
+      </button>
+      <button class="sim-switch-btn" data-sim="rate-limiter" id="sim-btn-rate-limiter">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>Distributed Rate Limiter</span>
+      </button>
+    </div>
+
+    <!-- ============================================================
+         SIMULATOR: URL SHORTENER (existing, untouched)
+    ============================================================ -->
+    <div id="sim-url-shortener">
 
     <!-- ============================================================
          TAB 1: CREATE (How It Works)
@@ -172,9 +212,20 @@
       <!-- Request Trace Section -->
       <section class="trace-section">
         <div class="trace-pipeline-wrap">
-          <div class="section-label">
-            <span class="section-label-dot"></span>
-            Request Flow
+          <div class="section-label trace-label-row">
+            <div class="section-label-left">
+              <span class="section-label-dot"></span>
+              <span>Request Flow</span>
+            </div>
+            <div class="pipeline-nav-controls" id="pipeline-nav-controls">
+              <span class="pipeline-nav-hint">Scroll / Drag to view hops</span>
+              <button type="button" class="pipeline-nav-btn" id="pipeline-scroll-left" aria-label="Scroll left to Browser Client" title="Scroll left">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <button type="button" class="pipeline-nav-btn" id="pipeline-scroll-right" aria-label="Scroll right to Response" title="Scroll right">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </div>
           </div>
           <div id="trace-pipeline-container" class="pipeline-preview-card">
             <div class="flow-preview-grid">
@@ -673,6 +724,549 @@
       <div id="chaos-container"></div>
     </div>
 
+    </div><!-- end #sim-url-shortener -->
+
+    <!-- ============================================================
+         SIMULATOR: DISTRIBUTED RATE LIMITER (NEW)
+    ============================================================ -->
+    <div id="sim-rate-limiter" style="display: none;">
+
+      <!-- ====== RL VIEW 1: HOW IT WORKS ====== -->
+      <div class="app-mode-view" id="rl-view-how-it-works">
+        <section class="hero-section rl-hero-interactive">
+          <div class="hero-eyebrow">✦ INTERACTIVE RATE LIMITER</div>
+          <h1 class="hero-title rl-title-compact">
+            How many requests can your
+            <span class="rl-gradient-inline">system survive?</span>
+          </h1>
+          <p class="hero-sub rl-sub-compact">
+            Send traffic and watch the limiter react in real time.
+            Every decision is explained: which requests pass, which get
+            <strong>429'd</strong>, and why downstream stays protected.
+          </p>
+
+          <!-- Interactive Control Toolbar with Clear Visual Hierarchy -->
+          <div class="rl-main-control-card">
+            <!-- Algorithm Switcher Pills -->
+            <div class="rl-algo-bar">
+              <span class="rl-bar-label">Algorithm:</span>
+              <div class="rl-algo-pills" id="rl-algo-pills">
+                <button type="button" class="rl-algo-pill active" data-algo="token_bucket">Token Bucket</button>
+                <button type="button" class="rl-algo-pill" data-algo="fixed_window">Fixed Window</button>
+                <button type="button" class="rl-algo-pill" data-algo="sliding_window">Sliding Window</button>
+              </div>
+              <!-- Hidden select for programmatic / backward compatibility -->
+              <select id="rl-hiw-algorithm" class="option-select" style="display: none;">
+                <option value="token_bucket" selected>Token Bucket</option>
+                <option value="fixed_window">Fixed Window</option>
+                <option value="sliding_window">Sliding Window</option>
+              </select>
+            </div>
+
+            <!-- Primary Action + Secondary Experiments -->
+            <div class="rl-action-row">
+              <!-- Primary: Obvious First Click -->
+              <button type="button" class="rl-btn-primary-send" id="rl-btn-send-1">
+                <svg class="rl-btn-play-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+                <span class="rl-btn-text">Send Request</span>
+              </button>
+
+              <!-- Volume experiments: escalating traffic -->
+              <div class="rl-secondary-controls">
+                <button type="button" class="rl-btn-secondary" id="rl-btn-send-10">Send 10</button>
+                <button type="button" class="rl-btn-secondary" id="rl-btn-send-100">Send 100</button>
+                <button type="button" class="rl-btn-secondary" id="rl-btn-send-burst">Burst 50</button>
+
+                <span class="rl-control-divider" aria-hidden="true"></span>
+
+                <!-- State experiments -->
+                <button type="button" class="rl-btn-secondary rl-btn-warn" id="rl-btn-simulate-limit" title="Jump straight to the limit without sending requests">Force Limit Reached</button>
+                <button type="button" class="rl-btn-ghost" id="rl-btn-reset-tokens" title="Reset bucket to full capacity">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                  <span>Reset</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Capacity Meter: the single strong visual state -->
+            <div class="rl-visual-state-box">
+              <div class="rl-vstate-header">
+                <div class="rl-capacity-readout">
+                  <span class="rl-capacity-now" id="rl-capacity-now">200</span>
+                  <span class="rl-capacity-of" id="rl-capacity-of">/ 200 tokens</span>
+                </div>
+
+                <div class="rl-vstate-right">
+                  <div class="rl-vstate-status">
+                    <span class="rl-vstate-dot" id="rl-vstate-dot"></span>
+                    <strong class="rl-vstate-label" id="rl-vstate-label">Bucket Full</strong>
+                  </div>
+                  <div class="rl-clock-widget">
+                    <span class="rl-clock-label">T =</span>
+                    <strong id="rl-sim-clock">0.000s</strong>
+                    <button type="button" class="btn-clock-tick" id="rl-btn-step-clock">+0.5s Refill</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Animated Capacity Meter -->
+              <div class="rl-token-progress">
+                <div class="rl-token-bar" id="rl-token-progress-bar" style="width: 100%;"></div>
+              </div>
+
+              <div class="rl-vstate-footer">
+                <div class="rl-token-info" id="rl-token-info-wrap">
+                  <span>Refilling at <strong>100/s</strong></span>
+                  <span class="rl-token-rate">Burst ceiling <strong>200</strong></span>
+                </div>
+                <details class="rl-vstate-details">
+                  <summary>Technical details</summary>
+                  <div class="rl-vstate-details-content">
+                    <span>Sustained Rate: <strong>100 req/s</strong></span>
+                    <span>Burst Multiplier: <strong>2.0×</strong></span>
+                    <span>Storage: <strong>In-Memory / Redis Lua</strong></span>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+
+          <!-- Causal Feedback Banner -->
+          <div class="rl-causal-banner" id="rl-causal-banner" style="display: none;"></div>
+        </section>
+
+        <!-- Request Trace Pipeline -->
+        <section class="trace-section">
+          <div class="trace-pipeline-wrap">
+            <div class="section-label trace-label-row">
+              <div class="section-label-left">
+                <span class="section-label-dot"></span>
+                <span>Request Flow</span>
+              </div>
+            </div>
+            <div id="rl-trace-pipeline" class="pipeline-preview-card"></div>
+          </div>
+
+          <!-- Hop Inspector -->
+          <div id="rl-hop-inspector" class="hop-inspector-wrap"></div>
+
+          <!-- Token Store Inspector -->
+          <div id="rl-token-store-inspector" class="rl-store-inspector-wrap"></div>
+
+          <!-- Distributed Topology & State Coordination Experiment -->
+          <div id="rl-distributed-experiment-container" class="rl-distributed-section"></div>
+
+          <!-- Race Condition Simulator -->
+          <div id="rl-race-sim-container" class="rl-race-section"></div>
+        </section>
+      </div><!-- end rl-view-how-it-works -->
+
+
+      <!-- ====== RL VIEW 2: SCALE SYSTEM ====== -->
+      <div class="app-mode-view view-hidden" id="rl-view-scale-simulator">
+        <div class="rl-scale-wrap">
+
+          <!-- ══════ 1. HEADLINE: what is happening right now ══════ -->
+          <section class="rl-scale-hero">
+            <div class="rl-scale-hero-copy">
+              <h2 class="rl-scale-title">Scale it until it <span class="rl-gradient-inline">breaks</span>.</h2>
+              <p class="rl-scale-sub">
+                Turn the dials below and watch a real distributed rate limiter respond.
+                Every number updates live, and every number is explained.
+              </p>
+            </div>
+            <div class="rl-scenario-row" id="rl-scenario-row">
+              <span class="rl-scenario-label">Try a scenario</span>
+              <div class="rl-presets-row">
+                <button class="rl-preset-btn" data-rl-preset="normal">Normal traffic</button>
+                <button class="rl-preset-btn" data-rl-preset="flash_sale">Flash sale</button>
+                <button class="rl-preset-btn" data-rl-preset="botnet">Bot attack</button>
+                <button class="rl-preset-btn" data-rl-preset="global_spike">Global spike</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ══════ 2. THE FOUR NUMBERS THAT MATTER ══════ -->
+          <section class="rl-outcome-grid" aria-label="Live outcome metrics">
+            <article class="rl-outcome-tile" data-tone="ok" id="rl-tile-allowed">
+              <header class="rl-outcome-head">
+                <span class="rl-outcome-icon" data-icon="checkCircle"></span>
+                <span class="rl-outcome-name">Getting through</span>
+              </header>
+              <div class="rl-outcome-value" id="rl-metric-throughput">0</div>
+              <div class="rl-outcome-sub" id="rl-metric-throughput-sub">all within limits</div>
+              <div class="rl-outcome-meter"><span class="rl-outcome-meter-fill" id="rl-meter-allowed"></span></div>
+            </article>
+
+            <article class="rl-outcome-tile" data-tone="reject" id="rl-tile-rejected">
+              <header class="rl-outcome-head">
+                <span class="rl-outcome-icon" data-icon="xCircle"></span>
+                <span class="rl-outcome-name">Throttled · 429</span>
+              </header>
+              <div class="rl-outcome-value" id="rl-metric-rejection">0</div>
+              <div class="rl-outcome-sub" id="rl-metric-rejection-sub">rejected/s</div>
+              <div class="rl-outcome-meter"><span class="rl-outcome-meter-fill" id="rl-meter-rejected"></span></div>
+            </article>
+
+            <article class="rl-outcome-tile" data-tone="leak" id="rl-tile-leaked">
+              <header class="rl-outcome-head">
+                <span class="rl-outcome-icon" data-icon="unlock"></span>
+                <span class="rl-outcome-name">Leaked past limit</span>
+              </header>
+              <div class="rl-outcome-value" id="rl-metric-leaked">0</div>
+              <div class="rl-outcome-sub" id="rl-metric-leaked-sub">limits enforced</div>
+              <div class="rl-outcome-meter"><span class="rl-outcome-meter-fill" id="rl-meter-leaked"></span></div>
+            </article>
+
+            <article class="rl-outcome-tile" data-tone="latency" id="rl-tile-latency">
+              <header class="rl-outcome-head">
+                <span class="rl-outcome-icon" data-icon="pulse"></span>
+                <span class="rl-outcome-name">Response time</span>
+              </header>
+              <div class="rl-outcome-value" id="rl-metric-latency">0</div>
+              <div class="rl-outcome-sub" id="rl-metric-latency-sub">gateway → limiter → downstream</div>
+              <div class="rl-outcome-meter"><span class="rl-outcome-meter-fill" id="rl-meter-latency"></span></div>
+            </article>
+          </section>
+
+          <!-- ══════ 3. DIAGNOSIS: what this means, in plain English ══════ -->
+          <section class="rl-verdict-card healthy" id="rl-lesson-card">
+            <div class="rl-verdict-icon" id="rl-lesson-icon"></div>
+            <div class="rl-verdict-body">
+              <h3 class="rl-verdict-title" id="rl-lesson-title">Rate limiter ready</h3>
+              <p class="rl-verdict-text" id="rl-lesson-body">Drag traffic up. Switch to local memory. Enable a hot key. See what breaks.</p>
+              <p class="rl-verdict-action" id="rl-lesson-action">The distributed coordination problem is the lesson.</p>
+            </div>
+          </section>
+
+          <!-- ══════ 4. THE SYSTEM: where traffic flows and what is straining ══════ -->
+          <section class="rl-stage-block">
+            <div class="rl-block-head">
+              <h3 class="rl-block-title">Where the traffic goes</h3>
+              <p class="rl-block-hint">Each stage has a capacity. The fullest bar is your bottleneck.</p>
+            </div>
+
+            <div class="rl-arch-flow" id="rl-arch-flow">
+              <div class="rl-arch-node" id="rl-arch-client-card" data-stage="client">
+                <span class="rl-arch-icon" data-icon="client"></span>
+                <div class="rl-arch-name">Clients</div>
+                <div class="rl-arch-metric" id="rl-arch-client-metric">5.0k req/s</div>
+                <div class="rl-arch-note">offered traffic</div>
+              </div>
+
+              <div class="rl-arch-link" data-flow="healthy"><span class="rl-arch-link-dot"></span></div>
+
+              <div class="rl-arch-node" id="rl-arch-gw-card" data-stage="gateway">
+                <span class="rl-arch-icon" data-icon="gateway"></span>
+                <div class="rl-arch-name">API Gateways</div>
+                <div class="rl-arch-load">
+                  <div class="rl-arch-load-head"><span>load</span><span id="rl-arch-gw-pct">0%</span></div>
+                  <div class="rl-arch-track"><div class="rl-arch-fill" id="rl-arch-gw-fill" style="width:0%"></div></div>
+                </div>
+                <div class="rl-arch-note" id="rl-arch-gw-meta"><span>3 nodes</span><span>cap 75k/s</span></div>
+              </div>
+
+              <div class="rl-arch-link" data-flow="healthy"><span class="rl-arch-link-dot"></span></div>
+
+              <div class="rl-arch-node" id="rl-arch-rl-card" data-stage="limiter">
+                <span class="rl-arch-icon" data-icon="shield"></span>
+                <div class="rl-arch-name">Rate Limiters</div>
+                <div class="rl-arch-load">
+                  <div class="rl-arch-load-head"><span>load</span><span id="rl-arch-rl-pct">0%</span></div>
+                  <div class="rl-arch-track"><div class="rl-arch-fill" id="rl-arch-rl-fill" style="width:0%"></div></div>
+                </div>
+                <div class="rl-arch-note" id="rl-arch-rl-meta"><span>2 daemons</span><span>cap 100k/s</span></div>
+              </div>
+
+              <div class="rl-arch-link" data-flow="healthy"><span class="rl-arch-link-dot"></span></div>
+
+              <div class="rl-arch-node" id="rl-arch-redis-card" data-stage="store">
+                <span class="rl-arch-icon" data-icon="database"></span>
+                <div class="rl-arch-name" id="rl-arch-store-name">Redis Token Store</div>
+                <div class="rl-arch-load">
+                  <div class="rl-arch-load-head"><span>load</span><span id="rl-arch-redis-pct">0%</span></div>
+                  <div class="rl-arch-track"><div class="rl-arch-fill" id="rl-arch-redis-fill" style="width:0%"></div></div>
+                </div>
+                <div class="rl-arch-note" id="rl-arch-redis-meta"><span>4 shards</span><span>0 ops/s</span></div>
+              </div>
+
+              <div class="rl-arch-link" data-flow="healthy"><span class="rl-arch-link-dot"></span></div>
+
+              <div class="rl-arch-node" id="rl-arch-ds-card" data-stage="downstream">
+                <span class="rl-arch-icon" data-icon="zap"></span>
+                <div class="rl-arch-name">Downstream</div>
+                <div class="rl-arch-load">
+                  <div class="rl-arch-load-head"><span>load</span><span id="rl-arch-ds-pct">0%</span></div>
+                  <div class="rl-arch-track"><div class="rl-arch-fill" id="rl-arch-ds-fill" style="width:0%"></div></div>
+                </div>
+                <div class="rl-arch-note" id="rl-arch-ds-meta"><span>0 req/s</span><span>cap 15k/s</span></div>
+              </div>
+            </div>
+
+            <!-- Failure callouts -->
+            <div class="rl-alert rl-alert--hot" id="rl-hot-key-alert" style="display:none;">
+              <span class="rl-alert-icon" data-icon="alertTriangle"></span>
+              <div>
+                <strong>Hot key: one shard is melting</strong>
+                <span id="rl-hot-key-sub">Cluster average looks healthy, but one shard is saturated.</span>
+              </div>
+            </div>
+            <div class="rl-alert rl-alert--leak" id="rl-leakage-alert" style="display:none;">
+              <span class="rl-alert-icon" data-icon="unlock"></span>
+              <div>
+                <strong>Rate limit is leaking</strong>
+                <span id="rl-leakage-sub">Traffic is getting through above the configured limit.</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- ══════ 5. THE DIALS ══════ -->
+          <section class="rl-stage-block">
+            <div class="rl-block-head">
+              <h3 class="rl-block-title">Turn the dials</h3>
+              <p class="rl-block-hint">Every control changes the numbers above instantly.</p>
+              <button type="button" class="rl-btn-ghost rl-reset-inline" id="rl-btn-reset-infra">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                <span>Reset all</span>
+              </button>
+            </div>
+
+            <div class="rl-controls-grid">
+
+              <!-- Traffic & who is sending it -->
+              <div class="rl-control-card">
+                <div class="rl-control-card-head">
+                  <span class="rl-control-card-icon" data-icon="pulse"></span>
+                  <h4>Incoming traffic</h4>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top">
+                    <label for="rl-slider-traffic">Total traffic</label>
+                    <output class="rl-field-value" id="rl-val-traffic-display">5.0k <span class="unit">req/s</span></output>
+                  </div>
+                  <input type="range" class="rl-slider" id="rl-slider-traffic" min="100" max="100000" step="500" value="5000">
+                  <div class="rl-field-scale"><span>100</span><span>10k</span><span>50k</span><span>100k</span></div>
+                  <p class="rl-field-help">Every request per second arriving at your API.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top">
+                    <label for="rl-slider-identities">Active users</label>
+                    <output class="rl-field-value" id="rl-val-identities-display">500</output>
+                  </div>
+                  <input type="range" class="rl-slider" id="rl-slider-identities" min="10" max="10000" step="10" value="500">
+                  <p class="rl-field-help">Spread across this many identities. Limits apply <em>per identity</em>, not to the total.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top">
+                    <label for="rl-slider-top-ratio">Heaviest user's share</label>
+                    <output class="rl-field-value" id="rl-val-top-ratio-display">5%</output>
+                  </div>
+                  <input type="range" class="rl-slider" id="rl-slider-top-ratio" min="1" max="80" step="1" value="5">
+                  <p class="rl-field-help">One noisy neighbour sending this much of all traffic. Crank it up to simulate abuse.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top"><label for="rl-select-profile">Traffic shape</label></div>
+                  <select id="rl-select-profile" class="rl-select">
+                    <option value="uniform" selected>Uniform (everyone sends the same)</option>
+                    <option value="heavy_tail">Heavy tail (1% are power users)</option>
+                    <option value="abusive_spike">Abusive spike (one attacker dominates)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- The policy -->
+              <div class="rl-control-card">
+                <div class="rl-control-card-head">
+                  <span class="rl-control-card-icon" data-icon="shield"></span>
+                  <h4>The policy</h4>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top"><label for="rl-select-algorithm">Algorithm</label></div>
+                  <select id="rl-select-algorithm" class="rl-select">
+                    <option value="token_bucket" selected>Token Bucket (smooth refill, allows bursts)</option>
+                    <option value="fixed_window">Fixed Window (simple, spiky at edges)</option>
+                    <option value="sliding_window">Sliding Window (rolling, smoothest)</option>
+                  </select>
+                  <p class="rl-field-help" id="rl-algo-help">Tokens refill steadily; a full bucket absorbs a sudden burst.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top">
+                    <label for="rl-slider-limit">Limit per user</label>
+                    <output class="rl-field-value" id="rl-val-limit-display">100/s</output>
+                  </div>
+                  <input type="range" class="rl-slider" id="rl-slider-limit" min="10" max="1000" step="10" value="100">
+                  <p class="rl-field-help">The promise you make: one identity may send this many req/s.</p>
+                </div>
+
+                <div id="rl-algo-token-bucket-details">
+                  <div class="rl-field">
+                    <div class="rl-field-top">
+                      <label for="rl-slider-burst-cap">Burst capacity</label>
+                      <output class="rl-field-value" id="rl-val-burst-cap">200</output>
+                    </div>
+                    <input type="range" class="rl-slider" id="rl-slider-burst-cap" min="10" max="2000" step="10" value="200">
+                    <p class="rl-field-help">How much unused allowance can pile up for a spike.</p>
+                  </div>
+                  <div class="rl-field">
+                    <div class="rl-field-top">
+                      <label for="rl-slider-refill-rate">Refill rate</label>
+                      <output class="rl-field-value" id="rl-val-refill-rate">100/s</output>
+                    </div>
+                    <input type="range" class="rl-slider" id="rl-slider-refill-rate" min="10" max="1000" step="10" value="100">
+                    <p class="rl-field-help">How fast allowance comes back. This is your true sustained rate.</p>
+                  </div>
+                </div>
+
+                <div id="rl-algo-window-details" style="display:none;">
+                  <div class="rl-field rl-field--static">
+                    <span class="rl-field-static-label">Window size</span>
+                    <strong>1 second</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- The machines -->
+              <div class="rl-control-card">
+                <div class="rl-control-card-head">
+                  <span class="rl-control-card-icon" data-icon="network"></span>
+                  <h4>The infrastructure</h4>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top"><label for="rl-select-store">Where counters live</label></div>
+                  <select id="rl-select-store" class="rl-select">
+                    <option value="redis" selected>Redis (one shared count)</option>
+                    <option value="local_memory">Local memory (each gateway counts alone)</option>
+                  </select>
+                  <p class="rl-field-help" id="rl-store-help">One shared source of truth, so the global limit actually holds.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top"><label for="rl-select-atomicity">Check &amp; increment</label></div>
+                  <select id="rl-select-atomicity" class="rl-select">
+                    <option value="atomic" selected>Atomic (one indivisible step)</option>
+                    <option value="non_atomic">Non-atomic (read, then write)</option>
+                  </select>
+                  <p class="rl-field-help" id="rl-atomicity-help">Nothing can slip between the check and the increment.</p>
+                </div>
+
+                <div class="rl-field">
+                  <div class="rl-field-top"><label for="rl-select-fail-policy">If the store dies</label></div>
+                  <select id="rl-select-fail-policy" class="rl-select">
+                    <option value="fail_open" selected>Fail open (let traffic through, 200)</option>
+                    <option value="fail_closed">Fail closed (reject everything, 503)</option>
+                  </select>
+                  <p class="rl-field-help" id="rl-failpolicy-help">Availability over protection: downstream takes the hit.</p>
+                </div>
+
+                <div class="rl-steppers">
+                  <div class="rl-stepper">
+                    <span class="rl-stepper-label">Gateways</span>
+                    <div class="rl-stepper-ctrl">
+                      <button type="button" class="rl-step-btn" id="rl-btn-gw-minus" aria-label="Fewer gateways">−</button>
+                      <span class="rl-stepper-val" id="rl-val-gw-count">3</span>
+                      <button type="button" class="rl-step-btn" id="rl-btn-gw-plus" aria-label="More gateways">+</button>
+                    </div>
+                  </div>
+                  <div class="rl-stepper">
+                    <span class="rl-stepper-label">Limiters</span>
+                    <div class="rl-stepper-ctrl">
+                      <button type="button" class="rl-step-btn" id="rl-btn-rl-minus" aria-label="Fewer limiters">−</button>
+                      <span class="rl-stepper-val" id="rl-val-rl-count">2</span>
+                      <button type="button" class="rl-step-btn" id="rl-btn-rl-plus" aria-label="More limiters">+</button>
+                    </div>
+                  </div>
+                  <div class="rl-stepper">
+                    <span class="rl-stepper-label">Shards</span>
+                    <div class="rl-stepper-ctrl">
+                      <button type="button" class="rl-step-btn" id="rl-btn-shard-minus" aria-label="Fewer shards">−</button>
+                      <span class="rl-stepper-val" id="rl-val-shard-count">4</span>
+                      <button type="button" class="rl-step-btn" id="rl-btn-shard-plus" aria-label="More shards">+</button>
+                    </div>
+                  </div>
+                </div>
+
+                <button type="button" class="rl-btn-secondary rl-assumptions-btn" id="rl-btn-assumptions">
+                  Edit capacity assumptions
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ══════ 6. TRAFFIC OVER TIME ══════ -->
+          <section class="rl-stage-block">
+            <div class="rl-block-head">
+              <h3 class="rl-block-title">Traffic over time</h3>
+              <p class="rl-block-hint">Each change you make adds a point. Watch allowed split away from offered.</p>
+            </div>
+            <div class="rl-graph-card">
+              <div class="rl-graph-legend">
+                <span class="rl-legend-item" data-series="offered"><span class="rl-legend-swatch"></span>offered</span>
+                <span class="rl-legend-item" data-series="allowed"><span class="rl-legend-swatch"></span>allowed</span>
+                <span class="rl-legend-item" data-series="rejected"><span class="rl-legend-swatch"></span>throttled</span>
+              </div>
+              <div class="rl-graph-canvas-wrap">
+                <canvas id="rl-traffic-graph-canvas"></canvas>
+                <div class="rl-graph-empty" id="rl-graph-empty">Move any control to start plotting</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ══════ 7. THE MATH, made readable ══════ -->
+          <section class="rl-stage-block">
+            <details class="rl-math-disclosure" id="rl-math-disclosure">
+              <summary class="rl-math-summary">
+                <span class="rl-math-summary-left">
+                  <strong>Show me the math</strong>
+                  <span class="rl-math-summary-hint">Every number above, derived step by step</span>
+                </span>
+                <svg class="rl-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </summary>
+              <div class="rl-math-body">
+                <div class="rl-math-grid" id="rl-metrics-grid"></div>
+              </div>
+            </details>
+          </section>
+
+          <!-- ══════ 8. WHAT YOU CHANGED ══════ -->
+          <section class="rl-stage-block">
+            <details class="rl-math-disclosure">
+              <summary class="rl-math-summary">
+                <span class="rl-math-summary-left">
+                  <strong>What you changed (<span id="rl-history-count">0</span>)</strong>
+                  <span class="rl-math-summary-hint">Your experiment history</span>
+                </span>
+                <svg class="rl-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </summary>
+              <div class="rl-math-body">
+                <div class="history-timeline" id="rl-history-timeline"></div>
+              </div>
+            </details>
+          </section>
+
+        </div>
+      </div><!-- end rl-view-scale-simulator -->
+
+
+      <!-- ====== RL VIEW 3: CHALLENGES ====== -->
+      <div class="app-mode-view view-hidden" id="rl-view-challenges">
+        <div id="rl-challenges-container"></div>
+      </div>
+
+
+      <!-- ====== RL VIEW 4: CHAOS LAB ====== -->
+      <div class="app-mode-view view-hidden" id="rl-view-chaos-lab">
+        <div id="rl-chaos-container"></div>
+      </div>
+
+    </div><!-- end #sim-rate-limiter -->
+
   </main>
 
 
@@ -720,6 +1314,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>

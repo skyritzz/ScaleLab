@@ -10,12 +10,13 @@ import { BottleneckEngine } from './bottleneck.js';
 import { ChallengeModeManager } from './challenges.js';
 import { ChaosLabManager } from './chaos.js';
 import { TrafficGraph } from './graph.js';
-import { inject } from '@vercel/analytics';
-
-// Initialize Vercel Web Analytics
-try {
-  inject();
-} catch (_) {}
+import { RateLimiterController } from './rate-limiter/controller.js';
+// Initialize Vercel Web Analytics safely in bundled (Vite/Vercel) and raw static environments
+if (typeof window !== 'undefined') {
+  import('@vercel/analytics')
+    .then(mod => { if (mod && mod.inject) mod.inject(); })
+    .catch(() => {});
+}
 
 class ApplicationController {
   constructor() {
@@ -55,9 +56,13 @@ class ApplicationController {
   }
 
   cacheDom() {
-    // Mode Buttons & Views
-    this.modeButtons = document.querySelectorAll('.nav-tab-btn');
-    this.modeViews = document.querySelectorAll('.app-mode-view');
+    // Mode Buttons & Views, scoped to exclude the Rate Limiter simulator's
+    // nav/views, which share these same classes (see RateLimiterController).
+    // Without this, clicking any Rate Limiter nav tab also fires this
+    // controller's switchMode(null), which hides every .app-mode-view
+    // (including the URL Shortener's own), breaking it on return.
+    this.modeButtons = document.querySelectorAll('.nav-tab-btn:not(.rl-mode-btn)');
+    this.modeViews = document.querySelectorAll('.app-mode-view:not([id^="rl-view-"])');
 
     // Controls
     this.trafficSlider = document.getElementById('slider-traffic');
@@ -485,7 +490,22 @@ class ApplicationController {
             });
 
             clientRttMs = Math.round((performance.now() - clientReqStart) * 10) / 10;
-            const result = await response.json();
+
+            // Safely parse JSON since the backend may return empty body or HTML on error
+            let result;
+            const contentType = response.headers.get('content-type') || '';
+            const rawText = await response.text();
+            if (contentType.includes('application/json') && rawText.trim()) {
+              try {
+                result = JSON.parse(rawText);
+              } catch {
+                throw new Error(`Server returned malformed JSON (HTTP ${response.status}). Make sure the backend server is running on port 4000 (npm run server).`);
+              }
+            } else if (!rawText.trim()) {
+              throw new Error(`Backend server is not running or returned an empty response (HTTP ${response.status}). Start the server with: npm run server`);
+            } else {
+              throw new Error(`Backend returned unexpected response (HTTP ${response.status}). Make sure the backend is running on port 4000.`);
+            }
 
             if (!response.ok || result.status !== 'success') {
               throw new Error(result.message || `Request failed with status ${response.status}`);
@@ -494,7 +514,9 @@ class ApplicationController {
             realData = result;
           } catch (err) {
             console.error('[Shorten] API request failed:', err);
-            const errText = `Could not shorten URL: ${err.message}`;
+            const errText = err.message.startsWith('Failed to fetch')
+              ? 'Cannot reach the API server. Please start the backend (npm run server) and try again.'
+              : err.message;
             if (errorBanner) {
               errorBanner.textContent = errText;
               errorBanner.style.display = 'flex';
@@ -509,6 +531,7 @@ class ApplicationController {
               submitBtn.innerHTML = originalBtnHtml;
             }
           }
+
 
           // Automatically expand DB disclosure table so user sees the newly persisted link
           const dbDisclosure = document.getElementById('db-table-disclosure');
@@ -1458,4 +1481,54 @@ class ApplicationController {
 window.addEventListener('DOMContentLoaded', () => {
   const app = new ApplicationController();
   app.init();
+
+  /* ── Simulator Shell: URL Shortener ↔ Rate Limiter ── */
+  let rlController = null;
+  let activeSim = 'url-shortener';
+
+  const simUrlEl = document.getElementById('sim-url-shortener');
+  const simRlEl = document.getElementById('sim-rate-limiter');
+  const brandTitle = document.getElementById('brand-sim-title');
+  const urlTabs = document.querySelector('.header-tabs:not(.rl-header-tabs)');
+  const rlTabs = document.querySelector('.rl-header-tabs');
+
+  function switchSimulator(sim) {
+    if (sim === activeSim) return;
+    activeSim = sim;
+
+    // Show/hide simulator containers
+    if (simUrlEl) simUrlEl.style.display = sim === 'url-shortener' ? '' : 'none';
+    if (simRlEl) simRlEl.style.display = sim === 'rate-limiter' ? '' : 'none';
+
+    // Show/hide URL shortener nav tabs vs RL tabs
+    if (urlTabs) urlTabs.style.display = sim === 'url-shortener' ? '' : 'none';
+    if (rlTabs) rlTabs.style.display = sim === 'rate-limiter' ? '' : 'none';
+
+    // Update brand title
+    if (brandTitle) {
+      brandTitle.textContent = sim === 'url-shortener' ? 'URL Shortener' : 'Rate Limiter';
+    }
+
+    // Switch button active states
+    document.querySelectorAll('.sim-switch-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-sim') === sim);
+    });
+
+    // Lazy-init rate limiter on first switch
+    if (sim === 'rate-limiter' && !rlController) {
+      rlController = new RateLimiterController();
+      rlController.init();
+    }
+  }
+
+  // Hide RL tabs initially (URL shortener's tabs are shown)
+  if (rlTabs) rlTabs.style.display = 'none';
+
+  // Bind switcher buttons
+  document.querySelectorAll('.sim-switch-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sim = btn.getAttribute('data-sim');
+      if (sim) switchSimulator(sim);
+    });
+  });
 });

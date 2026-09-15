@@ -1,5 +1,5 @@
 /**
- * Mini Traffic & Load Graph — Exact Reference Design
+ * Mini Traffic & Load Graph: Exact Reference Design
  * 
  * Layout:
  * - Compact horizontal mini graph (~150px)

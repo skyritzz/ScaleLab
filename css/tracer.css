@@ -26,22 +26,52 @@
   align-items: center;
   justify-content: flex-start;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 1.5rem 1rem;
+  padding: 1.5rem 1.75rem 1.75rem;
   gap: 0;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   position: relative;
   width: 100%;
   max-width: 100%;
-  margin: 0 auto;
+  margin: 0;
   box-sizing: border-box;
+  cursor: grab;
+  user-select: none;
 }
-.pipeline-flow::-webkit-scrollbar { display: none; }
+
+.pipeline-flow.is-dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+  scroll-behavior: auto;
+}
+
+.pipeline-flow::-webkit-scrollbar {
+  height: 6px;
+}
+
+.pipeline-flow::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+  margin: 0 1.5rem;
+}
+
+.pipeline-flow::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+.pipeline-flow::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.6);
+}
+
 @media (min-width: 900px) {
   .pipeline-flow {
-    justify-content: center;
-    padding: 1.75rem 1.25rem;
+    justify-content: flex-start;
+    padding: 1.75rem 2rem 2rem;
   }
 }
 
@@ -198,7 +228,7 @@
 }
 
 /* =====================================================
-   CONNECTOR — animated flowing line
+   CONNECTOR: animated flowing line
    ===================================================== */
 .hop-connector {
   display: flex;
@@ -1146,4 +1176,83 @@
   box-shadow: none !important;
 }
 
+/* Light Theme Scrollbar for Pipeline */
+[data-theme="light"] .pipeline-flow {
+  scrollbar-color: rgba(15, 23, 42, 0.2) transparent;
+}
+[data-theme="light"] .pipeline-flow::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.04);
+}
+[data-theme="light"] .pipeline-flow::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.2);
+}
+[data-theme="light"] .pipeline-flow::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
 
+/* Pipeline Header & Navigation Controls */
+.trace-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.section-label-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pipeline-nav-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pipeline-nav-hint {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--t3);
+  letter-spacing: 0.02em;
+  margin-right: 0.25rem;
+  text-transform: none;
+}
+
+.pipeline-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--t2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.pipeline-nav-btn:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.pipeline-nav-btn:active {
+  transform: translateY(0);
+}
+
+[data-theme="light"] .pipeline-nav-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--t2);
+}
+
+[data-theme="light"] .pipeline-nav-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: var(--indigo);
+}

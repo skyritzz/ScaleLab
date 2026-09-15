@@ -9,6 +9,7 @@
     "server": "node --watch server/index.js",
     "dev:all": "concurrently -n \"backend,frontend\" -c \"magenta,cyan\" \"npm run server\" \"npm run dev\"",
     "db:migrate": "node -e \"import('./server/db.js').then(m => m.runMigrations()).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })\"",
+    "test:rate-limiter": "node tests/test_rate_limiter_logic.js",
     "test:privacy": "node tests/test_privacy_security.js",
     "test": "node tests/test_idempotency_collision.js && node tests/test_privacy_security.js",
     "build": "vite build",
